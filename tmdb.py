@@ -4,6 +4,10 @@ import streamlit as st
 BASE_URL = "https://api.themoviedb.org/3"
 
 
+# ============================================================
+# TOKEN
+# ============================================================
+
 def get_token():
 
     try:
@@ -18,15 +22,16 @@ def get_token():
         return None
 
 
+# ============================================================
+# REQUEST
+# ============================================================
+
+@st.cache_data(ttl=300, show_spinner=False)
 def tmdb_request(endpoint, params=None):
 
     token = get_token()
 
     if not token:
-        st.error(
-            "TMDB API token is missing. "
-            "Check Streamlit Secrets."
-        )
         return None
 
     headers = {
@@ -44,35 +49,27 @@ def tmdb_request(endpoint, params=None):
         )
 
         if response.status_code != 200:
-
-            st.error(
-                f"TMDB API error "
-                f"{response.status_code}: "
-                f"{response.text[:500]}"
-            )
-
             return None
 
         return response.json()
 
-    except requests.RequestException as e:
-
-        st.error(
-            f"Could not connect to TMDB: {e}"
-        )
-
+    except requests.RequestException:
         return None
 
 
+# ============================================================
+# SEARCH
+# ============================================================
+
 def search_movies(query, page=1):
 
-    if not query.strip():
+    if not query or not query.strip():
         return []
 
     data = tmdb_request(
         "/search/movie",
         {
-            "query": query,
+            "query": query.strip(),
             "page": page,
             "include_adult": False,
         },
@@ -81,11 +78,12 @@ def search_movies(query, page=1):
     if not data:
         return []
 
-    return data.get(
-        "results",
-        []
-    )
+    return data.get("results", [])
 
+
+# ============================================================
+# MOVIE DETAILS
+# ============================================================
 
 def get_movie_details(tmdb_id):
 
@@ -97,6 +95,10 @@ def get_movie_details(tmdb_id):
         },
     )
 
+
+# ============================================================
+# RECOMMENDATIONS
+# ============================================================
 
 def get_movie_recommendations(
     tmdb_id,
@@ -113,11 +115,12 @@ def get_movie_recommendations(
     if not data:
         return []
 
-    return data.get(
-        "results",
-        []
-    )
+    return data.get("results", [])
 
+
+# ============================================================
+# SIMILAR MOVIES
+# ============================================================
 
 def get_similar_movies(
     tmdb_id,
@@ -134,11 +137,12 @@ def get_similar_movies(
     if not data:
         return []
 
-    return data.get(
-        "results",
-        []
-    )
+    return data.get("results", [])
 
+
+# ============================================================
+# DISCOVER
+# ============================================================
 
 def get_discover_movies(
     genres=None,
@@ -146,20 +150,22 @@ def get_discover_movies(
     year_to=None,
     min_rating=0,
     page=1,
+    sort_by="popularity.desc",
+    min_vote_count=100,
 ):
 
     params = {
-        "sort_by": "popularity.desc",
+        "sort_by": sort_by,
         "include_adult": False,
         "include_video": False,
         "page": page,
-        "vote_count.gte": 100,
+        "vote_count.gte": min_vote_count,
         "vote_average.gte": min_rating,
     }
 
     if genres:
 
-        params["with_genres"] = ",".join(
+        params["with_genres"] = "|".join(
             str(x)
             for x in genres
         )
@@ -184,11 +190,50 @@ def get_discover_movies(
     if not data:
         return []
 
+    return data.get("results", [])
+
+
+# ============================================================
+# GENRE LIST
+# ============================================================
+
+def get_movie_genres():
+
+    data = tmdb_request(
+        "/genre/movie/list",
+        {
+            "language": "en-GB"
+        },
+    )
+
+    if not data:
+        return []
+
+    return data.get("genres", [])
+
+
+# ============================================================
+# TRENDING
+# ============================================================
+
+def get_trending_movies():
+
+    data = tmdb_request(
+        "/trending/movie/week"
+    )
+
+    if not data:
+        return []
+
     return data.get(
         "results",
         []
     )
 
+
+# ============================================================
+# IMAGE
+# ============================================================
 
 def image_url(
     path,
