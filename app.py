@@ -28,7 +28,7 @@ from recommendations import (
 
 
 # ============================================================
-# PAGE CONFIG
+# PAGE
 # ============================================================
 
 st.set_page_config(
@@ -69,8 +69,21 @@ st.markdown(
         font-weight: 800;
     }
 
-    .movie-title {
-        font-size: 22px;
+    .quick-title {
+        text-align: center;
+        font-size: 32px;
+        font-weight: 800;
+    }
+
+    .quick-subtitle {
+        text-align: center;
+        opacity: 0.7;
+        margin-bottom: 15px;
+    }
+
+    .quick-score {
+        text-align: center;
+        font-size: 20px;
         font-weight: 700;
     }
 
@@ -100,6 +113,7 @@ page = st.sidebar.radio(
     "Menu",
     [
         "🍿 Tonight",
+        "🧠 Build My Profile",
         "🔎 Find a Movie",
         "📋 My Watchlist",
         "🎬 Watched",
@@ -117,113 +131,69 @@ page = st.sidebar.radio(
 def save_movie(details):
 
     if not details:
-        return False
+        return
 
-    try:
-
-        add_movie(
-            tmdb_id=details.get("id"),
-            title=details.get(
-                "title",
-                "Unknown",
-            ),
-            original_title=details.get(
-                "original_title"
-            ),
-            overview=details.get(
-                "overview"
-            ),
-            release_date=details.get(
-                "release_date"
-            ),
-            runtime=details.get(
-                "runtime"
-            ),
-            vote_average=details.get(
-                "vote_average"
-            ),
-            vote_count=details.get(
-                "vote_count"
-            ),
-            poster_path=details.get(
-                "poster_path"
-            ),
-            backdrop_path=details.get(
-                "backdrop_path"
-            ),
-            genres=details.get(
-                "genres"
-            ),
-            cast=details.get(
-                "cast"
-            ),
-            directors=details.get(
-                "directors"
-            ),
-            keywords=details.get(
-                "keywords"
-            ),
-        )
-
-        return True
-
-    except TypeError:
-
-        # Compatibility with an older
-        # database.py that doesn't yet
-        # have the extra movie fields.
-
-        try:
-
-            add_movie(
-                tmdb_id=details.get("id"),
-                title=details.get(
-                    "title",
-                    "Unknown",
-                ),
-                original_title=details.get(
-                    "original_title"
-                ),
-                overview=details.get(
-                    "overview"
-                ),
-                release_date=details.get(
-                    "release_date"
-                ),
-                runtime=details.get(
-                    "runtime"
-                ),
-                vote_average=details.get(
-                    "vote_average"
-                ),
-                vote_count=details.get(
-                    "vote_count"
-                ),
-                poster_path=details.get(
-                    "poster_path"
-                ),
-                backdrop_path=details.get(
-                    "backdrop_path"
-                ),
+    add_movie(
+        tmdb_id=details["id"],
+        title=details.get(
+            "title",
+            "Unknown",
+        ),
+        original_title=details.get(
+            "original_title"
+        ),
+        overview=details.get(
+            "overview"
+        ),
+        release_date=details.get(
+            "release_date"
+        ),
+        runtime=details.get(
+            "runtime"
+        ),
+        vote_average=details.get(
+            "vote_average"
+        ),
+        vote_count=details.get(
+            "vote_count"
+        ),
+        poster_path=details.get(
+            "poster_path"
+        ),
+        backdrop_path=details.get(
+            "backdrop_path"
+        ),
+        genres=details.get(
+            "genres"
+        ),
+        cast=details.get(
+            "credits",
+            {}
+        ).get(
+            "cast",
+            []
+        ),
+        directors=[
+            person
+            for person in details.get(
+                "credits",
+                {}
+            ).get(
+                "crew",
+                []
             )
-
-            return True
-
-        except Exception as e:
-
-            st.error(
-                f"Could not save movie: {e}"
-            )
-
-            return False
-
-    except Exception as e:
-
-        st.error(
-            f"Could not save movie: {e}"
-        )
-
-        return False
+            if person.get(
+                "job"
+            ) == "Director"
+        ],
+        keywords=details.get(
+            "keywords",
+            {}
+        ).get(
+            "keywords",
+            []
+        ),
+    )
 
 
 # ============================================================
@@ -232,11 +202,13 @@ def save_movie(details):
 
 def display_movie(
     movie,
-    key_prefix="movie",
+    show_buttons=True,
 ):
 
     poster = image_url(
-        movie.get("poster_path")
+        movie.get(
+            "poster_path"
+        )
     )
 
     if poster:
@@ -246,35 +218,32 @@ def display_movie(
             use_container_width=True,
         )
 
-    st.markdown(
-        f'<div class="movie-title">'
-        f'{movie.get("title", "Unknown")}'
-        f'</div>',
-        unsafe_allow_html=True,
+    st.subheader(
+        movie.get(
+            "title",
+            "Unknown",
+        )
     )
 
     release = movie.get(
         "release_date",
-        "",
+        ""
     )
-
-    if release:
-        release = release[:4]
 
     if release:
 
         st.caption(
-            f"📅 {release}"
+            f"📅 {release[:4]}"
         )
 
-    tmdb_rating = movie.get(
+    rating = movie.get(
         "vote_average"
     )
 
-    if tmdb_rating:
+    if rating:
 
         st.write(
-            f"⭐ TMDB: {tmdb_rating:.1f}/10"
+            f"⭐ TMDB: {rating:.1f}/10"
         )
 
     match = movie.get(
@@ -284,8 +253,9 @@ def display_movie(
     if match is not None:
 
         st.markdown(
-            f'<div class="match">🎯 '
-            f'{match:.0f}% Match</div>',
+            f'<div class="match">'
+            f'🎯 {match:.0f}% Match'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -299,21 +269,16 @@ def display_movie(
             overview
         )
 
-    reason = movie.get(
-        "reason"
-    )
-
-    if not reason:
-
-        reason = recommendation_reason(
+    st.caption(
+        "💡 "
+        +
+        recommendation_reason(
             movie
         )
+    )
 
-    if reason:
-
-        st.caption(
-            f"💡 {reason}"
-        )
+    if not show_buttons:
+        return
 
     tmdb_id = movie.get(
         "id"
@@ -328,8 +293,7 @@ def display_movie(
 
         if st.button(
             "📋 Watchlist",
-            key=f"{key_prefix}_wl_{tmdb_id}",
-            use_container_width=True,
+            key=f"wl_{tmdb_id}_{user}",
         ):
 
             details = get_movie_details(
@@ -338,23 +302,24 @@ def display_movie(
 
             if details:
 
-                if save_movie(details):
+                save_movie(
+                    details
+                )
 
-                    add_to_watchlist(
-                        user,
-                        tmdb_id,
-                    )
+                add_to_watchlist(
+                    user,
+                    tmdb_id,
+                )
 
-                    st.success(
-                        "Added to watchlist."
-                    )
+                st.success(
+                    "Added to watchlist."
+                )
 
     with col2:
 
         if st.button(
             "🎬 Watched",
-            key=f"{key_prefix}_watched_{tmdb_id}",
-            use_container_width=True,
+            key=f"watched_{tmdb_id}_{user}",
         ):
 
             details = get_movie_details(
@@ -363,23 +328,350 @@ def display_movie(
 
             if details:
 
-                if save_movie(details):
+                save_movie(
+                    details
+                )
 
-                    log_watched_movie(
-                        [user],
-                        tmdb_id,
-                    )
+                log_watched_movie(
+                    user,
+                    tmdb_id,
+                )
 
-                    st.success(
-                        "Marked as watched."
-                    )
+                st.success(
+                    "Marked as watched."
+                )
+
+
+# ============================================================
+# QUICK PROFILE
+# ============================================================
+
+elif page == "🧠 Build My Profile":
+
+    st.markdown(
+        '<div class="title">'
+        '🧠 Build My Profile'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="subtitle">'
+        'Quickly rate films you already know. '
+        'The more you rate, the smarter your '
+        'recommendations become.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.info(
+        f"🎯 Building {user}'s profile"
+    )
+
+    # --------------------------------------------------------
+    # SESSION STATE
+    # --------------------------------------------------------
+
+    if (
+        "quick_movies"
+        not in st.session_state
+    ):
+
+        st.session_state[
+            "quick_movies"
+        ] = []
+
+    if (
+        "quick_index"
+        not in st.session_state
+    ):
+
+        st.session_state[
+            "quick_index"
+        ] = 0
+
+    if (
+        "quick_started_user"
+        not in st.session_state
+        or
+        st.session_state[
+            "quick_started_user"
+        ] != user
+    ):
+
+        st.session_state[
+            "quick_movies"
+        ] = []
+
+        st.session_state[
+            "quick_index"
+        ] = 0
+
+        st.session_state[
+            "quick_started_user"
+        ] = user
+
+    # --------------------------------------------------------
+    # GET MOVIES
+    # --------------------------------------------------------
+
+    if not st.session_state[
+        "quick_movies"
+    ]:
+
+        with st.spinner(
+            "Finding films for you..."
+        ):
+
+            movies = (
+                get_personal_recommendations(
+                    user,
+                    limit=30,
+                )
+            )
+
+        st.session_state[
+            "quick_movies"
+        ] = movies
+
+        st.session_state[
+            "quick_index"
+        ] = 0
+
+    movies = st.session_state[
+        "quick_movies"
+    ]
+
+    index = st.session_state[
+        "quick_index"
+    ]
+
+    # --------------------------------------------------------
+    # FINISHED
+    # --------------------------------------------------------
+
+    if index >= len(movies):
+
+        st.success(
+            "🎉 Profile building session complete!"
+        )
+
+        st.write(
+            "Your ratings have been saved. "
+            "Your recommendations will now "
+            "start adapting to your tastes."
+        )
+
+        if st.button(
+            "🔄 Start Another Session"
+        ):
+
+            st.session_state[
+                "quick_movies"
+            ] = []
+
+            st.session_state[
+                "quick_index"
+            ] = 0
+
+            st.rerun()
+
+    else:
+
+        movie = movies[index]
+
+        poster = image_url(
+            movie.get(
+                "poster_path"
+            ),
+            "w780",
+        )
+
+        # ----------------------------------------------------
+        # PROGRESS
+        # ----------------------------------------------------
+
+        st.progress(
+            index / len(movies)
+        )
+
+        st.markdown(
+            f'<div class="quick-subtitle">'
+            f'Film {index + 1} of '
+            f'{len(movies)}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ----------------------------------------------------
+        # MOVIE
+        # ----------------------------------------------------
+
+        col1, col2 = st.columns(
+            [1, 1.5]
+        )
+
+        with col1:
+
+            if poster:
+
+                st.image(
+                    poster,
+                    use_container_width=True,
+                )
+
+        with col2:
+
+            st.markdown(
+                '<div class="quick-title">'
+                +
+                movie.get(
+                    "title",
+                    "Unknown"
+                )
+                +
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            release = movie.get(
+                "release_date",
+                ""
+            )
+
+            if release:
+
+                st.caption(
+                    release[:4]
+                )
+
+            rating = movie.get(
+                "vote_average"
+            )
+
+            if rating:
+
+                st.write(
+                    f"⭐ TMDB "
+                    f"{rating:.1f}/10"
+                )
+
+            overview = movie.get(
+                "overview"
+            )
+
+            if overview:
+
+                st.write(
+                    overview
+                )
+
+        st.markdown("---")
+
+        st.markdown(
+            '<div class="quick-title">'
+            'How much do you like this film?'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        st.write("")
+
+        # ----------------------------------------------------
+        # RATING BUTTONS
+        # ----------------------------------------------------
+
+        cols = st.columns(6)
+
+        choices = [
+            ("😍", "Love", 5.0),
+            ("🙂", "Like", 4.0),
+            ("😐", "OK", 3.0),
+            ("🙁", "Dislike", 2.0),
+            ("😡", "Hate", 1.0),
+            ("⏭️", "Never Seen", None),
+        ]
+
+        selected = None
+
+        for column, choice in zip(
+            cols,
+            choices
+        ):
+
+            emoji, label, value = choice
+
+            with column:
+
+                if st.button(
+                    f"{emoji}\n{label}",
+                    key=f"quick_{index}_{label}",
+                    use_container_width=True,
+                ):
+
+                    selected = value
+
+        # ----------------------------------------------------
+        # PROCESS
+        # ----------------------------------------------------
+
+        if selected is not None:
+
+            details = get_movie_details(
+                movie["id"]
+            )
+
+            if details:
+
+                save_movie(
+                    details
+                )
+
+                save_rating(
+                    user,
+                    movie["id"],
+                    selected,
+                    None,
+                    selected == 5.0,
+                )
+
+            st.session_state[
+                "quick_index"
+            ] += 1
+
+            st.rerun()
+
+        # ----------------------------------------------------
+        # NEVER SEEN
+        # ----------------------------------------------------
+
+        if st.button(
+            "⏭️ I've never seen this — skip",
+            key=f"skip_{index}",
+            use_container_width=True,
+        ):
+
+            st.session_state[
+                "quick_index"
+            ] += 1
+
+            st.rerun()
+
+        st.markdown("---")
+
+        st.caption(
+            "💡 Tip: Don't overthink it. "
+            "Your first instinct is usually "
+            "more useful than trying to give "
+            "the 'correct' rating."
+        )
 
 
 # ============================================================
 # TONIGHT
 # ============================================================
 
-if page == "🍿 Tonight":
+elif page == "🍿 Tonight":
 
     st.markdown(
         '<div class="title">'
@@ -390,8 +682,8 @@ if page == "🍿 Tonight":
 
     st.markdown(
         '<div class="subtitle">'
-        'Personalised recommendations based on '
-        'your movie tastes.'
+        'Personalised recommendations based '
+        'on what you actually enjoy.'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -403,10 +695,6 @@ if page == "🍿 Tonight":
             "🎲 Surprise Me",
         ]
     )
-
-    # ========================================================
-    # PERSONAL
-    # ========================================================
 
     with tab1:
 
@@ -420,9 +708,8 @@ if page == "🍿 Tonight":
         if not recommendations:
 
             st.info(
-                "I need a few highly-rated "
-                "movies from you before I can "
-                "make personalised recommendations."
+                "Build your profile using "
+                "🧠 Build My Profile first."
             )
 
         else:
@@ -437,16 +724,13 @@ if page == "🍿 Tonight":
                 recommendations
             ):
 
-                with cols[index % 4]:
+                with cols[
+                    index % 4
+                ]:
 
                     display_movie(
-                        movie,
-                        key_prefix=f"personal_{index}",
+                        movie
                     )
-
-    # ========================================================
-    # BOTH
-    # ========================================================
 
     with tab2:
 
@@ -461,15 +745,15 @@ if page == "🍿 Tonight":
         if not shared:
 
             st.info(
-                "Once both of you have rated "
-                "some movies, I'll find films "
-                "that match you both."
+                "Both profiles need some "
+                "ratings before I can calculate "
+                "your shared taste."
             )
 
         else:
 
             st.subheader(
-                "🍿 Best matches for Anthony + Kseniia"
+                "🍿 Best matches for both of you"
             )
 
             cols = st.columns(4)
@@ -478,16 +762,13 @@ if page == "🍿 Tonight":
                 shared
             ):
 
-                with cols[index % 4]:
+                with cols[
+                    index % 4
+                ]:
 
                     display_movie(
-                        movie,
-                        key_prefix=f"shared_{index}",
+                        movie
                     )
-
-    # ========================================================
-    # SURPRISE
-    # ========================================================
 
     with tab3:
 
@@ -495,14 +776,8 @@ if page == "🍿 Tonight":
             "🎲 Surprise Me"
         )
 
-        st.write(
-            "A film you probably wouldn't "
-            "have searched for yourself."
-        )
-
         if st.button(
-            "🎲 Find Something",
-            key="surprise_button",
+            "🎲 Find Something"
         ):
 
             recommendations = (
@@ -514,22 +789,19 @@ if page == "🍿 Tonight":
 
             if recommendations:
 
-                movie = recommendations[0]
-
                 display_movie(
-                    movie,
-                    key_prefix="surprise",
+                    recommendations[0]
                 )
 
             else:
 
                 st.warning(
-                    "I need some ratings first."
+                    "Build your profile first."
                 )
 
 
 # ============================================================
-# FIND A MOVIE
+# SEARCH
 # ============================================================
 
 elif page == "🔎 Find a Movie":
@@ -541,7 +813,6 @@ elif page == "🔎 Find a Movie":
     query = st.text_input(
         "Search for a film",
         placeholder="e.g. Interstellar",
-        key="main_movie_search",
     )
 
     if query:
@@ -558,17 +829,15 @@ elif page == "🔎 Find a Movie":
 
         else:
 
-            st.subheader(
-                f"Search results for '{query}'"
-            )
-
             cols = st.columns(4)
 
             for index, movie in enumerate(
                 results[:12]
             ):
 
-                with cols[index % 4]:
+                with cols[
+                    index % 4
+                ]:
 
                     poster = image_url(
                         movie.get(
@@ -583,8 +852,11 @@ elif page == "🔎 Find a Movie":
                             use_container_width=True,
                         )
 
-                    st.markdown(
-                        f"### {movie.get('title', 'Unknown')}"
+                    st.subheader(
+                        movie.get(
+                            "title",
+                            "Unknown",
+                        )
                     )
 
                     if movie.get(
@@ -602,14 +874,13 @@ elif page == "🔎 Find a Movie":
                     ):
 
                         st.write(
-                            "⭐ "
+                            f"⭐ "
                             f"{movie['vote_average']:.1f}/10"
                         )
 
                     if st.button(
                         "View",
-                        key=f"search_view_{index}_{movie['id']}",
-                        use_container_width=True,
+                        key=f"view_{movie['id']}",
                     ):
 
                         details = (
@@ -620,15 +891,13 @@ elif page == "🔎 Find a Movie":
 
                         if details:
 
+                            save_movie(
+                                details
+                            )
+
                             st.session_state[
                                 "selected_movie"
                             ] = details
-
-                            st.rerun()
-
-    # ========================================================
-    # SELECTED MOVIE
-    # ========================================================
 
     if (
         "selected_movie"
@@ -669,13 +938,12 @@ elif page == "🔎 Find a Movie":
 
         with col2:
 
-            if details.get(
-                "overview"
-            ):
-
-                st.write(
-                    details["overview"]
+            st.write(
+                details.get(
+                    "overview",
+                    "",
                 )
+            )
 
             if details.get(
                 "vote_average"
@@ -695,49 +963,22 @@ elif page == "🔎 Find a Movie":
                     f"{details['runtime']} minutes"
                 )
 
-            st.caption(
-                f"TMDB ID: {details.get('id')}"
-            )
+            if st.button(
+                "📋 Add to My Watchlist"
+            ):
 
-            col_a, col_b = st.columns(2)
+                save_movie(
+                    details
+                )
 
-            with col_a:
+                add_to_watchlist(
+                    user,
+                    details["id"],
+                )
 
-                if st.button(
-                    "📋 Add to My Watchlist",
-                    key="selected_watchlist",
-                    use_container_width=True,
-                ):
-
-                    if save_movie(details):
-
-                        add_to_watchlist(
-                            user,
-                            details["id"],
-                        )
-
-                        st.success(
-                            "Added to your watchlist."
-                        )
-
-            with col_b:
-
-                if st.button(
-                    "🎬 Mark Watched",
-                    key="selected_watched",
-                    use_container_width=True,
-                ):
-
-                    if save_movie(details):
-
-                        log_watched_movie(
-                            user,
-                            details["id"],
-                        )
-
-                        st.success(
-                            "Marked as watched."
-                        )
+                st.success(
+                    "Added to your watchlist."
+                )
 
 
 # ============================================================
@@ -829,282 +1070,93 @@ elif page == "⭐ My Ratings":
 
     st.markdown("---")
 
-    # ========================================================
-    # RATE A MOVIE
-    # ========================================================
-
     st.subheader(
         "⭐ Rate a Movie"
     )
 
-    st.write(
-        "Search for the movie you want to rate."
+    search = st.text_input(
+        "Search for a movie to rate",
+        placeholder="e.g. The Dark Knight",
     )
 
-    rating_search = st.text_input(
-        "Movie title",
-        placeholder="e.g. Interstellar",
-        key="rating_movie_search",
-    )
+    selected_movie = None
 
-    if rating_search:
+    if search:
 
-        rating_results = search_movies(
-            rating_search
+        results = search_movies(
+            search
         )
 
-        if not rating_results:
+        if results:
 
-            st.warning(
-                "No movies found."
+            options = {
+                f"{m.get('title', 'Unknown')} "
+                f"({m.get('release_date', '')[:4]})":
+                m["id"]
+                for m in results[:10]
+            }
+
+            choice = st.selectbox(
+                "Choose the movie",
+                list(options.keys()),
+            )
+
+            if choice:
+
+                selected_movie = (
+                    get_movie_details(
+                        options[choice]
+                    )
+                )
+
+    rating = st.slider(
+        "Rating",
+        0.5,
+        5.0,
+        3.0,
+        0.5,
+    )
+
+    review = st.text_area(
+        "Review",
+        placeholder="Optional",
+    )
+
+    favourite = st.checkbox(
+        "❤️ Favourite"
+    )
+
+    if st.button(
+        "Save Rating"
+    ):
+
+        if not selected_movie:
+
+            st.error(
+                "Search for and select "
+                "a movie first."
             )
 
         else:
 
-            # ------------------------------------------------
-            # BUILD FRIENDLY MOVIE NAMES
-            # ------------------------------------------------
-
-            movie_options = []
-
-            for movie in rating_results[:12]:
-
-                year = ""
-
-                if movie.get(
-                    "release_date"
-                ):
-
-                    year = (
-                        movie[
-                            "release_date"
-                        ][:4]
-                    )
-
-                title = movie.get(
-                    "title",
-                    "Unknown",
-                )
-
-                if year:
-
-                    label = (
-                        f"{title} ({year})"
-                    )
-
-                else:
-
-                    label = title
-
-                movie_options.append(
-                    (
-                        label,
-                        movie["id"],
-                    )
-                )
-
-            selected_label = st.selectbox(
-                "Choose the movie",
-                [
-                    option[0]
-                    for option in movie_options
-                ],
-                key="rating_movie_select",
+            save_movie(
+                selected_movie
             )
 
-            selected_id = dict(
-                movie_options
-            )[selected_label]
-
-            # ------------------------------------------------
-            # GET FULL DETAILS
-            # ------------------------------------------------
-
-            selected_details = (
-                get_movie_details(
-                    selected_id
-                )
+            save_rating(
+                user,
+                selected_movie["id"],
+                rating,
+                review or None,
+                favourite,
             )
 
-            if selected_details:
+            st.success(
+                f"⭐ {selected_movie['title']} "
+                f"rated {rating}/5"
+            )
 
-                # Save it to database before
-                # rating it.
-
-                if save_movie(
-                    selected_details
-                ):
-
-                    st.session_state[
-                        "rating_movie"
-                    ] = selected_details
-
-            # ------------------------------------------------
-            # SHOW SELECTED MOVIE
-            # ------------------------------------------------
-
-            if (
-                "rating_movie"
-                in st.session_state
-            ):
-
-                movie = st.session_state[
-                    "rating_movie"
-                ]
-
-                st.markdown("---")
-
-                col1, col2 = st.columns(
-                    [1, 2]
-                )
-
-                with col1:
-
-                    poster = image_url(
-                        movie.get(
-                            "poster_path"
-                        )
-                    )
-
-                    if poster:
-
-                        st.image(
-                            poster,
-                            use_container_width=True,
-                        )
-
-                with col2:
-
-                    st.subheader(
-                        movie.get(
-                            "title",
-                            "Movie",
-                        )
-                    )
-
-                    release = movie.get(
-                        "release_date"
-                    )
-
-                    if release:
-
-                        st.caption(
-                            f"📅 {release[:4]}"
-                        )
-
-                    if movie.get(
-                        "vote_average"
-                    ):
-
-                        st.write(
-                            f"⭐ TMDB "
-                            f"{movie['vote_average']:.1f}/10"
-                        )
-
-                    if movie.get(
-                        "runtime"
-                    ):
-
-                        st.write(
-                            f"⏱️ "
-                            f"{movie['runtime']} minutes"
-                        )
-
-                    if movie.get(
-                        "overview"
-                    ):
-
-                        st.write(
-                            movie["overview"]
-                        )
-
-                st.markdown("---")
-
-                # ------------------------------------------------
-                # RATING
-                # ------------------------------------------------
-
-                st.subheader(
-                    "⭐ Your Rating"
-                )
-
-                rating = st.slider(
-                    "How much did you like it?",
-                    0.5,
-                    5.0,
-                    3.0,
-                    0.5,
-                    key="movie_rating_slider",
-                )
-
-                # Visual stars
-
-                full_stars = int(
-                    rating
-                )
-
-                stars = (
-                    "⭐" * full_stars
-                )
-
-                st.markdown(
-                    f"## {stars} {rating:.1f}/5"
-                )
-
-                review = st.text_area(
-                    "Your review / notes",
-                    placeholder=(
-                        "What did you think? "
-                        "What did you like or dislike?"
-                    ),
-                    key="movie_review",
-                )
-
-                favourite = st.checkbox(
-                    "❤️ Add to Favourites",
-                    key="movie_favourite",
-                )
-
-                if st.button(
-                    "💾 Save My Rating",
-                    key="save_movie_rating",
-                    use_container_width=True,
-                ):
-
-                    try:
-
-                        save_rating(
-                            user,
-                            int(
-                                movie["id"]
-                            ),
-                            rating,
-                            review or None,
-                            favourite,
-                        )
-
-                        st.success(
-                            f"⭐ {movie['title']} "
-                            "rated successfully!"
-                        )
-
-                        # Clear selected rating
-                        # so next movie can be chosen.
-
-                        if (
-                            "rating_movie"
-                            in st.session_state
-                        ):
-
-                            del st.session_state[
-                                "rating_movie"
-                            ]
-
-                    except Exception as e:
-
-                        st.error(
-                            f"Could not save rating: {e}"
-                        )
+            st.rerun()
 
 
 # ============================================================
@@ -1147,7 +1199,7 @@ elif page == "👥 Anthony + Kseniia":
     )
 
     st.subheader(
-        "🍿 Movies we're likely to both enjoy"
+        "🍿 Movies you're both likely to enjoy"
     )
 
     recommendations = (
@@ -1161,9 +1213,8 @@ elif page == "👥 Anthony + Kseniia":
     if not recommendations:
 
         st.info(
-            "Rate some movies first. "
-            "The more you rate, the better "
-            "the recommendations become."
+            "Build both profiles using "
+            "🧠 Build My Profile."
         )
 
     else:
@@ -1174,9 +1225,10 @@ elif page == "👥 Anthony + Kseniia":
             recommendations
         ):
 
-            with cols[index % 4]:
+            with cols[
+                index % 4
+            ]:
 
                 display_movie(
-                    movie,
-                    key_prefix=f"both_{index}",
+                    movie
                 )
