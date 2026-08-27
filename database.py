@@ -1,801 +1,786 @@
-import streamlit as st
-
-from database import (
-    init_db,
-    add_movie,
-    get_movie_by_tmdb_id,
-    add_to_watchlist,
-    get_watchlist,
-    get_watch_history,
-    get_ratings,
-    get_favourites,
-    get_user_statistics,
-    save_rating,
-    log_watched_movie,
-)
-
-from tmdb import (
-    search_movies,
-    get_movie_details,
-    image_url,
-)
-
-from recommendations import (
-    get_personal_recommendations,
-    get_shared_recommendations,
-    recommendation_reason,
-)
+import sqlite3
+import json
+import pandas as pd
+from contextlib import closing
 
 
 # ============================================================
-# PAGE CONFIG
+# DATABASE SETTINGS
 # ============================================================
 
-st.set_page_config(
-    page_title="Movie Manager",
-    page_icon="🎬",
-    layout="wide",
-)
+DB_FILE = "movies.db"
 
 
 # ============================================================
-# DATABASE
+# CONNECTION
 # ============================================================
 
-init_db()
+def get_connection():
 
+    conn = sqlite3.connect(
+        DB_FILE,
+        check_same_thread=False
+    )
 
-# ============================================================
-# CSS
-# ============================================================
+    conn.row_factory = sqlite3.Row
 
-st.markdown(
-    """
-    <style>
-
-    .title {
-        font-size: 42px;
-        font-weight: 800;
-    }
-
-    .subtitle {
-        font-size: 19px;
-        opacity: 0.7;
-        margin-bottom: 25px;
-    }
-
-    .match {
-        font-size: 24px;
-        font-weight: 800;
-    }
-
-    .movie-title {
-        font-size: 22px;
-        font-weight: 700;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    return conn
 
 
 # ============================================================
-# SIDEBAR
+# DATABASE INITIALISATION
 # ============================================================
 
-st.sidebar.title("🎬 Movie Manager")
+def init_db():
 
-user = st.sidebar.selectbox(
-    "Your profile",
-    [
-        "Anthony",
-        "Kseniia",
-    ],
-)
+    with closing(get_connection()) as conn:
 
-st.sidebar.markdown("---")
+        cursor = conn.cursor()
 
-page = st.sidebar.radio(
-    "Menu",
-    [
-        "🍿 Tonight",
-        "🔎 Find a Movie",
-        "📋 My Watchlist",
-        "🎬 Watched",
-        "⭐ My Ratings",
-        "❤️ Favourites",
-        "👥 Anthony + Kseniia",
-    ],
-)
+        # ----------------------------------------------------
+        # MOVIES
+        # ----------------------------------------------------
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS movies (
 
-# ============================================================
-# SAVE MOVIE
-# ============================================================
+                tmdb_id INTEGER PRIMARY KEY,
 
-def save_movie(details):
+                title TEXT NOT NULL,
 
-    if not details:
-        return False
+                original_title TEXT,
 
-    try:
+                overview TEXT,
 
-        add_movie(
-            tmdb_id=details.get("id"),
-            title=details.get(
-                "title",
-                "Unknown",
-            ),
-            original_title=details.get(
-                "original_title"
-            ),
-            overview=details.get(
-                "overview"
-            ),
-            release_date=details.get(
-                "release_date"
-            ),
-            runtime=details.get(
-                "runtime"
-            ),
-            vote_average=details.get(
-                "vote_average"
-            ),
-            vote_count=details.get(
-                "vote_count"
-            ),
-            poster_path=details.get(
-                "poster_path"
-            ),
-            backdrop_path=details.get(
-                "backdrop_path"
-            ),
-            genres=details.get(
-                "genres"
-            ),
-            cast=details.get(
-                "cast"
-            ),
-            directors=details.get(
-                "directors"
-            ),
-            keywords=details.get(
-                "keywords"
-            ),
-        )
+                release_date TEXT,
 
-        return True
+                runtime INTEGER,
 
-    except TypeError:
+                vote_average REAL,
 
-        # Compatibility with an older
-        # database.py that doesn't yet
-        # have the extra movie fields.
+                vote_count INTEGER,
 
-        try:
+                poster_path TEXT,
 
-            add_movie(
-                tmdb_id=details.get("id"),
-                title=details.get(
-                    "title",
-                    "Unknown",
-                ),
-                original_title=details.get(
-                    "original_title"
-                ),
-                overview=details.get(
-                    "overview"
-                ),
-                release_date=details.get(
-                    "release_date"
-                ),
-                runtime=details.get(
-                    "runtime"
-                ),
-                vote_average=details.get(
-                    "vote_average"
-                ),
-                vote_count=details.get(
-                    "vote_count"
-                ),
-                poster_path=details.get(
-                    "poster_path"
-                ),
-                backdrop_path=details.get(
-                    "backdrop_path"
-                ),
+                backdrop_path TEXT,
+
+                genres TEXT,
+
+                cast TEXT,
+
+                directors TEXT,
+
+                keywords TEXT,
+
+                date_added TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
+        """)
 
-            return True
+        # ----------------------------------------------------
+        # DATABASE MIGRATION
+        #
+        # This makes the app safer if an older movies.db
+        # already exists without the newer columns.
+        # ----------------------------------------------------
 
-        except Exception as e:
+        cursor.execute("""
+            PRAGMA table_info(movies)
+        """)
 
-            st.error(
-                f"Could not save movie: {e}"
+        existing_columns = {
+            row["name"]
+            for row in cursor.fetchall()
+        }
+
+        movie_columns = {
+            "original_title": "TEXT",
+            "overview": "TEXT",
+            "release_date": "TEXT",
+            "runtime": "INTEGER",
+            "vote_average": "REAL",
+            "vote_count": "INTEGER",
+            "poster_path": "TEXT",
+            "backdrop_path": "TEXT",
+            "genres": "TEXT",
+            "cast": "TEXT",
+            "directors": "TEXT",
+            "keywords": "TEXT",
+            "date_added": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        }
+
+        for column, definition in movie_columns.items():
+
+            if column not in existing_columns:
+
+                try:
+
+                    cursor.execute(
+                        f"""
+                        ALTER TABLE movies
+                        ADD COLUMN {column} {definition}
+                        """
+                    )
+
+                except sqlite3.OperationalError:
+                    pass
+
+        # ----------------------------------------------------
+        # USERS
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+
+                username TEXT PRIMARY KEY,
+
+                display_name TEXT NOT NULL,
+
+                date_created TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
+        """)
 
-            return False
+        # ----------------------------------------------------
+        # WATCHED
+        # ----------------------------------------------------
 
-    except Exception as e:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS watched (
 
-        st.error(
-            f"Could not save movie: {e}"
-        )
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-        return False
+                username TEXT NOT NULL,
+
+                tmdb_id INTEGER NOT NULL,
+
+                date_watched TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY(username)
+                    REFERENCES users(username),
+
+                FOREIGN KEY(tmdb_id)
+                    REFERENCES movies(tmdb_id),
+
+                UNIQUE(username, tmdb_id)
+            )
+        """)
+
+        # ----------------------------------------------------
+        # RATINGS
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ratings (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                username TEXT NOT NULL,
+
+                tmdb_id INTEGER NOT NULL,
+
+                rating REAL NOT NULL,
+
+                review TEXT,
+
+                favourite INTEGER
+                    DEFAULT 0,
+
+                date_rated TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY(username)
+                    REFERENCES users(username),
+
+                FOREIGN KEY(tmdb_id)
+                    REFERENCES movies(tmdb_id),
+
+                UNIQUE(username, tmdb_id)
+            )
+        """)
+
+        # ----------------------------------------------------
+        # WATCHLIST
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS watchlist (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                username TEXT NOT NULL,
+
+                tmdb_id INTEGER NOT NULL,
+
+                date_added TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY(username)
+                    REFERENCES users(username),
+
+                FOREIGN KEY(tmdb_id)
+                    REFERENCES movies(tmdb_id),
+
+                UNIQUE(username, tmdb_id)
+            )
+        """)
+
+        # ----------------------------------------------------
+        # USER PROFILES
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS profiles (
+
+                username TEXT PRIMARY KEY,
+
+                favourite_genres TEXT,
+
+                excluded_genres TEXT,
+
+                favourite_actors TEXT,
+
+                excluded_actors TEXT,
+
+                favourite_directors TEXT,
+
+                excluded_directors TEXT,
+
+                pacing TEXT,
+
+                tone TEXT,
+
+                preferred_decades TEXT,
+
+                min_runtime INTEGER,
+
+                max_runtime INTEGER,
+
+                last_updated TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY(username)
+                    REFERENCES users(username)
+            )
+        """)
+
+        # ----------------------------------------------------
+        # DEFAULT USERS
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO users
+            (
+                username,
+                display_name
+            )
+            VALUES (?, ?)
+        """, (
+            "Anthony",
+            "Anthony"
+        ))
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO users
+            (
+                username,
+                display_name
+            )
+            VALUES (?, ?)
+        """, (
+            "Kseniia",
+            "Kseniia"
+        ))
+
+        # ----------------------------------------------------
+        # DEFAULT PROFILES
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO profiles
+            (
+                username
+            )
+            VALUES (?)
+        """, (
+            "Anthony",
+        ))
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO profiles
+            (
+                username
+            )
+            VALUES (?)
+        """, (
+            "Kseniia",
+        ))
+
+        conn.commit()
 
 
 # ============================================================
-# MOVIE CARD
+# MOVIES
 # ============================================================
 
-def display_movie(
-    movie,
-    key_prefix="movie",
+def add_movie(
+    tmdb_id,
+    title,
+    original_title=None,
+    overview=None,
+    release_date=None,
+    runtime=None,
+    vote_average=None,
+    vote_count=None,
+    poster_path=None,
+    backdrop_path=None,
+    genres=None,
+    cast=None,
+    directors=None,
+    keywords=None,
 ):
 
-    poster = image_url(
-        movie.get("poster_path")
-    )
+    # --------------------------------------------------------
+    # Convert lists/dictionaries to JSON
+    # --------------------------------------------------------
 
-    if poster:
-
-        st.image(
-            poster,
-            use_container_width=True,
+    if isinstance(genres, (list, dict)):
+        genres = json.dumps(
+            genres,
+            ensure_ascii=False
         )
 
-    st.markdown(
-        f'<div class="movie-title">'
-        f'{movie.get("title", "Unknown")}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    release = movie.get(
-        "release_date",
-        "",
-    )
-
-    if release:
-        release = release[:4]
-
-    if release:
-
-        st.caption(
-            f"📅 {release}"
+    if isinstance(cast, (list, dict)):
+        cast = json.dumps(
+            cast,
+            ensure_ascii=False
         )
 
-    tmdb_rating = movie.get(
-        "vote_average"
-    )
-
-    if tmdb_rating:
-
-        st.write(
-            f"⭐ TMDB: {tmdb_rating:.1f}/10"
+    if isinstance(directors, (list, dict)):
+        directors = json.dumps(
+            directors,
+            ensure_ascii=False
         )
 
-    match = movie.get(
-        "match_score"
-    )
-
-    if match is not None:
-
-        st.markdown(
-            f'<div class="match">🎯 '
-            f'{match:.0f}% Match</div>',
-            unsafe_allow_html=True,
+    if isinstance(keywords, (list, dict)):
+        keywords = json.dumps(
+            keywords,
+            ensure_ascii=False
         )
 
-    overview = movie.get(
-        "overview"
-    )
+    # --------------------------------------------------------
+    # Save movie
+    # --------------------------------------------------------
 
-    if overview:
+    with closing(get_connection()) as conn:
 
-        st.write(
-            overview
-        )
+        cursor = conn.cursor()
 
-    reason = movie.get(
-        "reason"
-    )
-
-    if not reason:
-
-        reason = recommendation_reason(
-            movie
-        )
-
-    if reason:
-
-        st.caption(
-            f"💡 {reason}"
-        )
-
-    tmdb_id = movie.get(
-        "id"
-    )
-
-    if not tmdb_id:
-        return
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        if st.button(
-            "📋 Watchlist",
-            key=f"{key_prefix}_wl_{tmdb_id}",
-            use_container_width=True,
-        ):
-
-            details = get_movie_details(
-                tmdb_id
+        cursor.execute("""
+            INSERT INTO movies
+            (
+                tmdb_id,
+                title,
+                original_title,
+                overview,
+                release_date,
+                runtime,
+                vote_average,
+                vote_count,
+                poster_path,
+                backdrop_path,
+                genres,
+                cast,
+                directors,
+                keywords
             )
 
-            if details:
-
-                if save_movie(details):
-
-                    add_to_watchlist(
-                        user,
-                        tmdb_id,
-                    )
-
-                    st.success(
-                        "Added to watchlist."
-                    )
-
-    with col2:
-
-        if st.button(
-            "🎬 Watched",
-            key=f"{key_prefix}_watched_{tmdb_id}",
-            use_container_width=True,
-        ):
-
-            details = get_movie_details(
-                tmdb_id
+            VALUES
+            (
+                ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?
             )
 
-            if details:
+            ON CONFLICT(tmdb_id)
+            DO UPDATE SET
 
-                if save_movie(details):
+                title =
+                    excluded.title,
 
-                    log_watched_movie(
-                        [user],
-                        tmdb_id,
-                    )
+                original_title =
+                    excluded.original_title,
 
-                    st.success(
-                        "Marked as watched."
-                    )
+                overview =
+                    excluded.overview,
+
+                release_date =
+                    excluded.release_date,
+
+                runtime =
+                    excluded.runtime,
+
+                vote_average =
+                    excluded.vote_average,
+
+                vote_count =
+                    excluded.vote_count,
+
+                poster_path =
+                    excluded.poster_path,
+
+                backdrop_path =
+                    excluded.backdrop_path,
+
+                genres =
+                    excluded.genres,
+
+                cast =
+                    excluded.cast,
+
+                directors =
+                    excluded.directors,
+
+                keywords =
+                    excluded.keywords
+        """, (
+            tmdb_id,
+            title,
+            original_title,
+            overview,
+            release_date,
+            runtime,
+            vote_average,
+            vote_count,
+            poster_path,
+            backdrop_path,
+            genres,
+            cast,
+            directors,
+            keywords,
+        ))
+
+        conn.commit()
 
 
 # ============================================================
-# TONIGHT
+# GET MOVIE BY TMDB ID
 # ============================================================
 
-if page == "🍿 Tonight":
+def get_movie_by_tmdb_id(tmdb_id):
 
-    st.markdown(
-        '<div class="title">'
-        '🍿 What should we watch?'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    with closing(get_connection()) as conn:
 
-    st.markdown(
-        '<div class="subtitle">'
-        'Personalised recommendations based on '
-        'your movie tastes.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+        cursor = conn.cursor()
 
-    tab1, tab2, tab3 = st.tabs(
-        [
-            "👤 For Me",
-            "👥 For Both of Us",
-            "🎲 Surprise Me",
-        ]
-    )
+        cursor.execute("""
+            SELECT *
+            FROM movies
+            WHERE tmdb_id = ?
+        """, (
+            int(tmdb_id),
+        ))
 
-    # ========================================================
-    # PERSONAL
-    # ========================================================
+        row = cursor.fetchone()
 
-    with tab1:
+        if not row:
+            return None
 
-        recommendations = (
-            get_personal_recommendations(
-                user,
-                limit=12,
-            )
-        )
-
-        if not recommendations:
-
-            st.info(
-                "I need a few highly-rated "
-                "movies from you before I can "
-                "make personalised recommendations."
-            )
-
-        else:
-
-            st.subheader(
-                f"🎯 Best matches for {user}"
-            )
-
-            cols = st.columns(4)
-
-            for index, movie in enumerate(
-                recommendations
-            ):
-
-                with cols[index % 4]:
-
-                    display_movie(
-                        movie,
-                        key_prefix=f"personal_{index}",
-                    )
-
-    # ========================================================
-    # BOTH
-    # ========================================================
-
-    with tab2:
-
-        shared = (
-            get_shared_recommendations(
-                "Anthony",
-                "Kseniia",
-                limit=12,
-            )
-        )
-
-        if not shared:
-
-            st.info(
-                "Once both of you have rated "
-                "some movies, I'll find films "
-                "that match you both."
-            )
-
-        else:
-
-            st.subheader(
-                "🍿 Best matches for Anthony + Kseniia"
-            )
-
-            cols = st.columns(4)
-
-            for index, movie in enumerate(
-                shared
-            ):
-
-                with cols[index % 4]:
-
-                    display_movie(
-                        movie,
-                        key_prefix=f"shared_{index}",
-                    )
-
-    # ========================================================
-    # SURPRISE
-    # ========================================================
-
-    with tab3:
-
-        st.subheader(
-            "🎲 Surprise Me"
-        )
-
-        st.write(
-            "A film you probably wouldn't "
-            "have searched for yourself."
-        )
-
-        if st.button(
-            "🎲 Find Something",
-            key="surprise_button",
-        ):
-
-            recommendations = (
-                get_personal_recommendations(
-                    user,
-                    limit=12,
-                )
-            )
-
-            if recommendations:
-
-                movie = recommendations[0]
-
-                display_movie(
-                    movie,
-                    key_prefix="surprise",
-                )
-
-            else:
-
-                st.warning(
-                    "I need some ratings first."
-                )
+        return dict(row)
 
 
 # ============================================================
-# FIND A MOVIE
+# SEARCH MOVIES IN DATABASE BY TITLE
 # ============================================================
 
-elif page == "🔎 Find a Movie":
+def search_movies_by_title(
+    title,
+    limit=20,
+):
 
-    st.title(
-        "🔎 Find a Movie"
+    title = str(title).strip()
+
+    if not title:
+        return []
+
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = 20
+
+    limit = max(
+        1,
+        min(
+            limit,
+            100
+        )
     )
 
-    query = st.text_input(
-        "Search for a film",
-        placeholder="e.g. Interstellar",
-        key="main_movie_search",
-    )
+    with closing(get_connection()) as conn:
 
-    if query:
+        cursor = conn.cursor()
 
-        results = search_movies(
-            query
+        cursor.execute(
+            f"""
+                SELECT *
+                FROM movies
+
+                WHERE title LIKE ?
+
+                OR original_title LIKE ?
+
+                ORDER BY
+                    CASE
+                        WHEN LOWER(title) = LOWER(?)
+                        THEN 0
+                        WHEN LOWER(title) LIKE LOWER(?)
+                        THEN 1
+                        ELSE 2
+                    END,
+                    title
+
+                LIMIT {limit}
+            """,
+            (
+                f"%{title}%",
+                f"%{title}%",
+                title,
+                f"{title}%",
+            )
         )
 
-        if not results:
+        rows = cursor.fetchall()
 
-            st.warning(
-                "No movies found."
-            )
-
-        else:
-
-            st.subheader(
-                f"Search results for '{query}'"
-            )
-
-            cols = st.columns(4)
-
-            for index, movie in enumerate(
-                results[:12]
-            ):
-
-                with cols[index % 4]:
-
-                    poster = image_url(
-                        movie.get(
-                            "poster_path"
-                        )
-                    )
-
-                    if poster:
-
-                        st.image(
-                            poster,
-                            use_container_width=True,
-                        )
-
-                    st.markdown(
-                        f"### {movie.get('title', 'Unknown')}"
-                    )
-
-                    if movie.get(
-                        "release_date"
-                    ):
-
-                        st.caption(
-                            movie[
-                                "release_date"
-                            ][:4]
-                        )
-
-                    if movie.get(
-                        "vote_average"
-                    ):
-
-                        st.write(
-                            "⭐ "
-                            f"{movie['vote_average']:.1f}/10"
-                        )
-
-                    if st.button(
-                        "View",
-                        key=f"search_view_{index}_{movie['id']}",
-                        use_container_width=True,
-                    ):
-
-                        details = (
-                            get_movie_details(
-                                movie["id"]
-                            )
-                        )
-
-                        if details:
-
-                            st.session_state[
-                                "selected_movie"
-                            ] = details
-
-                            st.rerun()
-
-    # ========================================================
-    # SELECTED MOVIE
-    # ========================================================
-
-    if (
-        "selected_movie"
-        in st.session_state
-    ):
-
-        details = st.session_state[
-            "selected_movie"
+        return [
+            dict(row)
+            for row in rows
         ]
 
-        st.markdown("---")
 
-        st.title(
-            details.get(
-                "title",
-                "Movie",
-            )
-        )
+# ============================================================
+# GET MOVIE BY EXACT TITLE
+# ============================================================
 
-        col1, col2 = st.columns(
-            [1, 2]
-        )
+def get_movie_by_title(title):
 
-        with col1:
+    title = str(title).strip()
 
-            poster = image_url(
-                details.get(
-                    "poster_path"
-                )
-            )
+    if not title:
+        return None
 
-            if poster:
+    with closing(get_connection()) as conn:
 
-                st.image(
-                    poster,
-                    use_container_width=True,
-                )
+        cursor = conn.cursor()
 
-        with col2:
+        cursor.execute("""
+            SELECT *
+            FROM movies
 
-            if details.get(
-                "overview"
-            ):
+            WHERE LOWER(title) = LOWER(?)
 
-                st.write(
-                    details["overview"]
-                )
+            LIMIT 1
+        """, (
+            title,
+        ))
 
-            if details.get(
-                "vote_average"
-            ):
+        row = cursor.fetchone()
 
-                st.write(
-                    f"⭐ TMDB "
-                    f"{details['vote_average']:.1f}/10"
-                )
+        if not row:
+            return None
 
-            if details.get(
-                "runtime"
-            ):
-
-                st.write(
-                    f"⏱️ "
-                    f"{details['runtime']} minutes"
-                )
-
-            st.caption(
-                f"TMDB ID: {details.get('id')}"
-            )
-
-            col_a, col_b = st.columns(2)
-
-            with col_a:
-
-                if st.button(
-                    "📋 Add to My Watchlist",
-                    key="selected_watchlist",
-                    use_container_width=True,
-                ):
-
-                    if save_movie(details):
-
-                        add_to_watchlist(
-                            user,
-                            details["id"],
-                        )
-
-                        st.success(
-                            "Added to your watchlist."
-                        )
-
-            with col_b:
-
-                if st.button(
-                    "🎬 Mark Watched",
-                    key="selected_watched",
-                    use_container_width=True,
-                ):
-
-                    if save_movie(details):
-
-                        log_watched_movie(
-                            user,
-                            details["id"],
-                        )
-
-                        st.success(
-                            "Marked as watched."
-                        )
+        return dict(row)
 
 
 # ============================================================
 # WATCHLIST
 # ============================================================
 
-elif page == "📋 My Watchlist":
+def add_to_watchlist(
+    username,
+    tmdb_id,
+):
 
-    st.title(
-        f"📋 {user}'s Watchlist"
-    )
+    with closing(get_connection()) as conn:
 
-    data = get_watchlist(
-        user
-    )
+        cursor = conn.cursor()
 
-    if data.empty:
+        cursor.execute("""
+            INSERT OR IGNORE INTO watchlist
+            (
+                username,
+                tmdb_id
+            )
 
-        st.info(
-            "Your watchlist is empty."
-        )
+            VALUES (?, ?)
+        """, (
+            username,
+            tmdb_id,
+        ))
 
-    else:
+        conn.commit()
 
-        st.dataframe(
-            data,
-            use_container_width=True,
-            hide_index=True,
-        )
+
+def remove_from_watchlist(
+    username,
+    tmdb_id,
+):
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            DELETE FROM watchlist
+
+            WHERE username = ?
+
+            AND tmdb_id = ?
+        """, (
+            username,
+            tmdb_id,
+        ))
+
+        conn.commit()
+
+
+def get_watchlist(username):
+
+    with closing(get_connection()) as conn:
+
+        return pd.read_sql_query("""
+            SELECT
+
+                w.tmdb_id AS "TMDB_ID",
+
+                m.title AS "Title",
+
+                m.release_date AS "Release Date",
+
+                m.vote_average AS "TMDB Rating",
+
+                w.date_added AS "Added"
+
+            FROM watchlist w
+
+            LEFT JOIN movies m
+                ON m.tmdb_id = w.tmdb_id
+
+            WHERE w.username = ?
+
+            ORDER BY w.date_added DESC
+        """, conn, params=(username,))
 
 
 # ============================================================
 # WATCHED
 # ============================================================
 
-elif page == "🎬 Watched":
+def log_watched_movie(
+    users,
+    tmdb_id,
+):
 
-    st.title(
-        f"🎬 {user}'s Watched Movies"
-    )
+    if isinstance(users, str):
 
-    data = get_watch_history(
-        user,
-        limit=100,
-    )
+        users = [users]
 
-    if data.empty:
+    with closing(get_connection()) as conn:
 
-        st.info(
-            "Nothing recorded yet."
+        cursor = conn.cursor()
+
+        for username in users:
+
+            cursor.execute("""
+                INSERT OR IGNORE INTO watched
+                (
+                    username,
+                    tmdb_id
+                )
+
+                VALUES (?, ?)
+            """, (
+                username,
+                tmdb_id,
+            ))
+
+        conn.commit()
+
+
+def remove_watched_movie(
+    username,
+    tmdb_id,
+):
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            DELETE FROM watched
+
+            WHERE username = ?
+
+            AND tmdb_id = ?
+        """, (
+            username,
+            tmdb_id,
+        ))
+
+        conn.commit()
+
+
+def get_watch_history(
+    username,
+    limit=100,
+):
+
+    try:
+
+        limit = int(limit)
+
+    except Exception:
+
+        limit = 100
+
+    limit = max(
+        1,
+        min(
+            limit,
+            5000
         )
+    )
 
-    else:
+    with closing(get_connection()) as conn:
 
-        st.dataframe(
-            data,
-            use_container_width=True,
-            hide_index=True,
+        return pd.read_sql_query(
+            f"""
+                SELECT
+
+                    w.tmdb_id AS "TMDB_ID",
+
+                    m.title AS "Title",
+
+                    m.release_date AS "Release Date",
+
+                    m.vote_average AS "TMDB Rating",
+
+                    w.date_watched AS "Date Watched"
+
+                FROM watched w
+
+                LEFT JOIN movies m
+                    ON m.tmdb_id = w.tmdb_id
+
+                WHERE w.username = ?
+
+                ORDER BY w.date_watched DESC
+
+                LIMIT {limit}
+            """,
+
+            conn,
+
+            params=(username,)
         )
 
 
@@ -803,380 +788,631 @@ elif page == "🎬 Watched":
 # RATINGS
 # ============================================================
 
-elif page == "⭐ My Ratings":
+def save_rating(
+    username,
+    tmdb_id,
+    rating,
+    review=None,
+    favourite=False,
+):
 
-    st.title(
-        f"⭐ {user}'s Ratings"
-    )
+    rating = float(rating)
 
-    data = get_ratings(
-        user
-    )
-
-    if data.empty:
-
-        st.info(
-            "You haven't rated anything yet."
+    rating = max(
+        0.5,
+        min(
+            5.0,
+            rating
         )
-
-    else:
-
-        st.dataframe(
-            data,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    st.markdown("---")
-
-    # ========================================================
-    # RATE A MOVIE
-    # ========================================================
-
-    st.subheader(
-        "⭐ Rate a Movie"
     )
 
-    st.write(
-        "Search for the movie you want to rate."
+    favourite_value = (
+        1
+        if favourite
+        else 0
     )
 
-    rating_search = st.text_input(
-        "Movie title",
-        placeholder="e.g. Interstellar",
-        key="rating_movie_search",
-    )
+    with closing(get_connection()) as conn:
 
-    if rating_search:
+        cursor = conn.cursor()
 
-        rating_results = search_movies(
-            rating_search
-        )
-
-        if not rating_results:
-
-            st.warning(
-                "No movies found."
+        cursor.execute("""
+            INSERT INTO ratings
+            (
+                username,
+                tmdb_id,
+                rating,
+                review,
+                favourite
             )
 
-        else:
+            VALUES (?, ?, ?, ?, ?)
 
-            # ------------------------------------------------
-            # BUILD FRIENDLY MOVIE NAMES
-            # ------------------------------------------------
+            ON CONFLICT(username, tmdb_id)
 
-            movie_options = []
+            DO UPDATE SET
 
-            for movie in rating_results[:12]:
+                rating =
+                    excluded.rating,
 
-                year = ""
+                review =
+                    excluded.review,
 
-                if movie.get(
-                    "release_date"
-                ):
+                favourite =
+                    excluded.favourite,
 
-                    year = (
-                        movie[
-                            "release_date"
-                        ][:4]
-                    )
+                date_rated =
+                    CURRENT_TIMESTAMP
+        """, (
+            username,
+            tmdb_id,
+            rating,
+            review,
+            favourite_value,
+        ))
 
-                title = movie.get(
-                    "title",
-                    "Unknown",
-                )
+        # ----------------------------------------------------
+        # Rating a movie automatically means watched
+        # ----------------------------------------------------
 
-                if year:
-
-                    label = (
-                        f"{title} ({year})"
-                    )
-
-                else:
-
-                    label = title
-
-                movie_options.append(
-                    (
-                        label,
-                        movie["id"],
-                    )
-                )
-
-            selected_label = st.selectbox(
-                "Choose the movie",
-                [
-                    option[0]
-                    for option in movie_options
-                ],
-                key="rating_movie_select",
+        cursor.execute("""
+            INSERT OR IGNORE INTO watched
+            (
+                username,
+                tmdb_id
             )
 
-            selected_id = dict(
-                movie_options
-            )[selected_label]
+            VALUES (?, ?)
+        """, (
+            username,
+            tmdb_id,
+        ))
 
-            # ------------------------------------------------
-            # GET FULL DETAILS
-            # ------------------------------------------------
+        conn.commit()
 
-            selected_details = (
-                get_movie_details(
-                    selected_id
-                )
-            )
 
-            if selected_details:
+def get_ratings(username):
 
-                # Save it to database before
-                # rating it.
+    with closing(get_connection()) as conn:
 
-                if save_movie(
-                    selected_details
-                ):
+        return pd.read_sql_query("""
+            SELECT
 
-                    st.session_state[
-                        "rating_movie"
-                    ] = selected_details
+                r.tmdb_id AS "TMDB_ID",
 
-            # ------------------------------------------------
-            # SHOW SELECTED MOVIE
-            # ------------------------------------------------
+                m.title AS "Title",
 
-            if (
-                "rating_movie"
-                in st.session_state
-            ):
+                r.rating AS "Rating",
 
-                movie = st.session_state[
-                    "rating_movie"
-                ]
+                r.review AS "Review",
 
-                st.markdown("---")
+                r.favourite AS "Favourite",
 
-                col1, col2 = st.columns(
-                    [1, 2]
-                )
+                r.date_rated AS "Date Rated"
 
-                with col1:
+            FROM ratings r
 
-                    poster = image_url(
-                        movie.get(
-                            "poster_path"
-                        )
-                    )
+            LEFT JOIN movies m
+                ON m.tmdb_id = r.tmdb_id
 
-                    if poster:
+            WHERE r.username = ?
 
-                        st.image(
-                            poster,
-                            use_container_width=True,
-                        )
-
-                with col2:
-
-                    st.subheader(
-                        movie.get(
-                            "title",
-                            "Movie",
-                        )
-                    )
-
-                    release = movie.get(
-                        "release_date"
-                    )
-
-                    if release:
-
-                        st.caption(
-                            f"📅 {release[:4]}"
-                        )
-
-                    if movie.get(
-                        "vote_average"
-                    ):
-
-                        st.write(
-                            f"⭐ TMDB "
-                            f"{movie['vote_average']:.1f}/10"
-                        )
-
-                    if movie.get(
-                        "runtime"
-                    ):
-
-                        st.write(
-                            f"⏱️ "
-                            f"{movie['runtime']} minutes"
-                        )
-
-                    if movie.get(
-                        "overview"
-                    ):
-
-                        st.write(
-                            movie["overview"]
-                        )
-
-                st.markdown("---")
-
-                # ------------------------------------------------
-                # RATING
-                # ------------------------------------------------
-
-                st.subheader(
-                    "⭐ Your Rating"
-                )
-
-                rating = st.slider(
-                    "How much did you like it?",
-                    0.5,
-                    5.0,
-                    3.0,
-                    0.5,
-                    key="movie_rating_slider",
-                )
-
-                # Visual stars
-
-                full_stars = int(
-                    rating
-                )
-
-                stars = (
-                    "⭐" * full_stars
-                )
-
-                st.markdown(
-                    f"## {stars} {rating:.1f}/5"
-                )
-
-                review = st.text_area(
-                    "Your review / notes",
-                    placeholder=(
-                        "What did you think? "
-                        "What did you like or dislike?"
-                    ),
-                    key="movie_review",
-                )
-
-                favourite = st.checkbox(
-                    "❤️ Add to Favourites",
-                    key="movie_favourite",
-                )
-
-                if st.button(
-                    "💾 Save My Rating",
-                    key="save_movie_rating",
-                    use_container_width=True,
-                ):
-
-                    try:
-
-                        save_rating(
-                            user,
-                            int(
-                                movie["id"]
-                            ),
-                            rating,
-                            review or None,
-                            favourite,
-                        )
-
-                        st.success(
-                            f"⭐ {movie['title']} "
-                            "rated successfully!"
-                        )
-
-                        # Clear selected rating
-                        # so next movie can be chosen.
-
-                        if (
-                            "rating_movie"
-                            in st.session_state
-                        ):
-
-                            del st.session_state[
-                                "rating_movie"
-                            ]
-
-                    except Exception as e:
-
-                        st.error(
-                            f"Could not save rating: {e}"
-                        )
+            ORDER BY r.date_rated DESC
+        """, conn, params=(username,))
 
 
 # ============================================================
 # FAVOURITES
 # ============================================================
 
-elif page == "❤️ Favourites":
+def get_favourites(username):
 
-    st.title(
-        f"❤️ {user}'s Favourites"
-    )
+    with closing(get_connection()) as conn:
 
-    data = get_favourites(
-        user
-    )
+        return pd.read_sql_query("""
+            SELECT
 
-    if data.empty:
+                r.tmdb_id AS "TMDB_ID",
 
-        st.info(
-            "No favourites yet."
-        )
+                m.title AS "Title",
 
-    else:
+                r.rating AS "Rating",
 
-        st.dataframe(
-            data,
-            use_container_width=True,
-            hide_index=True,
-        )
+                r.review AS "Review",
+
+                r.date_rated AS "Date Added"
+
+            FROM ratings r
+
+            LEFT JOIN movies m
+                ON m.tmdb_id = r.tmdb_id
+
+            WHERE r.username = ?
+
+            AND r.favourite = 1
+
+            ORDER BY r.date_rated DESC
+        """, conn, params=(username,))
+
+
+def set_favourite(
+    username,
+    tmdb_id,
+    favourite=True,
+):
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE ratings
+
+            SET favourite = ?
+
+            WHERE username = ?
+
+            AND tmdb_id = ?
+        """, (
+            1 if favourite else 0,
+            username,
+            tmdb_id,
+        ))
+
+        conn.commit()
 
 
 # ============================================================
-# BOTH USERS
+# USER PROFILE
 # ============================================================
 
-elif page == "👥 Anthony + Kseniia":
+def save_profile(
+    username,
+    favourite_genres=None,
+    excluded_genres=None,
+    favourite_actors=None,
+    excluded_actors=None,
+    favourite_directors=None,
+    excluded_directors=None,
+    pacing=None,
+    tone=None,
+    preferred_decades=None,
+    min_runtime=None,
+    max_runtime=None,
+):
 
-    st.title(
-        "👥 Anthony + Kseniia"
-    )
+    with closing(get_connection()) as conn:
 
-    st.subheader(
-        "🍿 Movies we're likely to both enjoy"
-    )
+        cursor = conn.cursor()
 
-    recommendations = (
-        get_shared_recommendations(
-            "Anthony",
-            "Kseniia",
-            limit=20,
-        )
-    )
+        cursor.execute("""
+            INSERT INTO profiles
+            (
+                username,
+                favourite_genres,
+                excluded_genres,
+                favourite_actors,
+                excluded_actors,
+                favourite_directors,
+                excluded_directors,
+                pacing,
+                tone,
+                preferred_decades,
+                min_runtime,
+                max_runtime
+            )
 
-    if not recommendations:
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
-        st.info(
-            "Rate some movies first. "
-            "The more you rate, the better "
-            "the recommendations become."
-        )
+            ON CONFLICT(username)
 
-    else:
+            DO UPDATE SET
 
-        cols = st.columns(4)
+                favourite_genres =
+                    excluded.favourite_genres,
 
-        for index, movie in enumerate(
-            recommendations
-        ):
+                excluded_genres =
+                    excluded.excluded_genres,
 
-            with cols[index % 4]:
+                favourite_actors =
+                    excluded.favourite_actors,
 
-                display_movie(
-                    movie,
-                    key_prefix=f"both_{index}",
+                excluded_actors =
+                    excluded.excluded_actors,
+
+                favourite_directors =
+                    excluded.favourite_directors,
+
+                excluded_directors =
+                    excluded.excluded_directors,
+
+                pacing =
+                    excluded.pacing,
+
+                tone =
+                    excluded.tone,
+
+                preferred_decades =
+                    excluded.preferred_decades,
+
+                min_runtime =
+                    excluded.min_runtime,
+
+                max_runtime =
+                    excluded.max_runtime,
+
+                last_updated =
+                    CURRENT_TIMESTAMP
+        """, (
+
+            username,
+
+            json.dumps(
+                favourite_genres or [],
+                ensure_ascii=False
+            ),
+
+            json.dumps(
+                excluded_genres or [],
+                ensure_ascii=False
+            ),
+
+            json.dumps(
+                favourite_actors or [],
+                ensure_ascii=False
+            ),
+
+            json.dumps(
+                excluded_actors or [],
+                ensure_ascii=False
+            ),
+
+            json.dumps(
+                favourite_directors or [],
+                ensure_ascii=False
+            ),
+
+            json.dumps(
+                excluded_directors or [],
+                ensure_ascii=False
+            ),
+
+            pacing,
+
+            json.dumps(
+                tone or [],
+                ensure_ascii=False
+            ),
+
+            json.dumps(
+                preferred_decades or [],
+                ensure_ascii=False
+            ),
+
+            min_runtime,
+
+            max_runtime,
+        ))
+
+        conn.commit()
+
+
+def get_profile(username):
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT *
+            FROM profiles
+            WHERE username = ?
+        """, (
+            username,
+        ))
+
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        data = dict(row)
+
+        json_fields = [
+            "favourite_genres",
+            "excluded_genres",
+            "favourite_actors",
+            "excluded_actors",
+            "favourite_directors",
+            "excluded_directors",
+            "tone",
+            "preferred_decades",
+        ]
+
+        for field in json_fields:
+
+            try:
+
+                data[field] = (
+                    json.loads(data[field])
+                    if data[field]
+                    else []
                 )
+
+            except Exception:
+
+                data[field] = []
+
+        return data
+
+
+# ============================================================
+# OLD SURVEY COMPATIBILITY
+# ============================================================
+
+def save_profile_survey(
+    user,
+    fav_genres_ids,
+    excl_genres_ids,
+    pacing,
+    tones,
+):
+
+    save_profile(
+        username=user,
+        favourite_genres=fav_genres_ids,
+        excluded_genres=excl_genres_ids,
+        pacing=pacing,
+        tone=tones,
+    )
+
+
+def get_profile_survey(user):
+
+    profile = get_profile(user)
+
+    if not profile:
+        return None
+
+    return {
+        "favorite_genres":
+            profile.get(
+                "favourite_genres",
+                []
+            ),
+
+        "excluded_genres":
+            profile.get(
+                "excluded_genres",
+                []
+            ),
+
+        "pacing_pref":
+            profile.get(
+                "pacing"
+            ),
+
+        "tone_tags":
+            profile.get(
+                "tone",
+                []
+            ),
+    }
+
+
+# ============================================================
+# USER STATISTICS
+# ============================================================
+
+def get_user_statistics(username):
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM watched
+            WHERE username = ?
+        """, (
+            username,
+        ))
+
+        watched_count = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM watchlist
+            WHERE username = ?
+        """, (
+            username,
+        ))
+
+        watchlist_count = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM ratings
+            WHERE username = ?
+        """, (
+            username,
+        ))
+
+        ratings_count = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT AVG(rating)
+            FROM ratings
+            WHERE username = ?
+        """, (
+            username,
+        ))
+
+        average_rating = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM ratings
+            WHERE username = ?
+
+            AND favourite = 1
+        """, (
+            username,
+        ))
+
+        favourites_count = cursor.fetchone()[0]
+
+        return {
+
+            "watched":
+                watched_count,
+
+            "watchlist":
+                watchlist_count,
+
+            "ratings":
+                ratings_count,
+
+            "average_rating":
+                round(
+                    average_rating,
+                    2
+                )
+                if average_rating is not None
+                else None,
+
+            "favourites":
+                favourites_count,
+        }
+
+
+# ============================================================
+# RECOMMENDATION DATA
+# ============================================================
+
+def get_liked_movie_ids(username):
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT tmdb_id
+
+            FROM ratings
+
+            WHERE username = ?
+
+            AND rating >= 4
+        """, (
+            username,
+        ))
+
+        return [
+            row[0]
+            for row in cursor.fetchall()
+        ]
+
+
+def get_disliked_movie_ids(username):
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT tmdb_id
+
+            FROM ratings
+
+            WHERE username = ?
+
+            AND rating <= 2
+        """, (
+            username,
+        ))
+
+        return [
+            row[0]
+            for row in cursor.fetchall()
+        ]
+
+
+def get_ratings_for_recommendation(username):
+
+    with closing(get_connection()) as conn:
+
+        return pd.read_sql_query("""
+            SELECT
+
+                r.tmdb_id AS "TMDB_ID",
+
+                r.rating AS "Rating",
+
+                m.title AS "Title",
+
+                m.genres AS "Genres",
+
+                m.cast AS "Cast",
+
+                m.directors AS "Directors",
+
+                m.keywords AS "Keywords",
+
+                m.runtime AS "Runtime",
+
+                m.release_date AS "Release Date"
+
+            FROM ratings r
+
+            LEFT JOIN movies m
+                ON m.tmdb_id = r.tmdb_id
+
+            WHERE r.username = ?
+
+            ORDER BY r.rating DESC
+        """, conn, params=(username,))
+
+
+# ============================================================
+# DATABASE HEALTH CHECK
+# ============================================================
+
+def database_summary():
+
+    with closing(get_connection()) as conn:
+
+        cursor = conn.cursor()
+
+        tables = [
+            "users",
+            "movies",
+            "watched",
+            "ratings",
+            "watchlist",
+            "profiles",
+        ]
+
+        result = {}
+
+        for table in tables:
+
+            cursor.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM {table}
+                """
+            )
+
+            result[table] = (
+                cursor.fetchone()[0]
+            )
+
+        return result
+
+
+# ============================================================
+# INITIALISE DATABASE
+# ============================================================
+
+init_db()
