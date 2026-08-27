@@ -1,2194 +1,989 @@
-# ============================================================
-# MOVIE MANAGER DATABASE
-# Version 2.0
-#
-# Database foundation for:
-# - Anthony
-# - Kseniia
-# - Movies
-# - Watchlists
-# - Watch history
-# - Ratings
-# - Reviews
-# - Favourites
-# - Genres
-# - Actors
-# - Directors
-# - Keywords
-# - Personal taste profiles
-# - Two-person recommendations
-# ============================================================
-
-import sqlite3
-import json
-from contextlib import contextmanager
-from datetime import datetime
-from typing import Optional, List, Dict, Any
-
+import streamlit as st
 import pandas as pd
 
+from database import (
+    init_db,
+    get_all_users,
+    get_user_statistics,
+    get_watchlist,
+    get_watch_history,
+    get_ratings,
+    get_favourites,
+    get_shared_watched_movies,
+    get_movie_by_tmdb_id,
+    add_movie,
+    add_to_watchlist,
+    remove_from_watchlist,
+    save_rating,
+    set_favourite,
+    set_movie_status,
+    log_watched_movie,
+    save_user_profile,
+    get_user_profile,
+)
+
 
 # ============================================================
-# SETTINGS
+# PAGE CONFIG
 # ============================================================
 
-DB_FILE = "movies.db"
-
-DEFAULT_USERS = [
-    "Anthony",
-    "Kseniia",
-]
+st.set_page_config(
+    page_title="Movie Manager",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 
 # ============================================================
-# DATABASE CONNECTION
+# INITIALISE DATABASE
 # ============================================================
 
-@contextmanager
-def get_connection():
+init_db()
+
+
+# ============================================================
+# CUSTOM CSS
+# ============================================================
+
+st.markdown(
     """
-    Safely open and close a SQLite connection.
-    """
+    <style>
 
-    conn = sqlite3.connect(
-        DB_FILE,
-        check_same_thread=False
+    .main-title {
+        font-size: 42px;
+        font-weight: 800;
+        margin-bottom: 0;
+    }
+
+    .subtitle {
+        font-size: 18px;
+        opacity: 0.7;
+        margin-bottom: 30px;
+    }
+
+    .movie-card {
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid rgba(128,128,128,0.25);
+        margin-bottom: 15px;
+    }
+
+    .stat-card {
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid rgba(128,128,128,0.25);
+        text-align: center;
+    }
+
+    .stat-number {
+        font-size: 32px;
+        font-weight: 800;
+    }
+
+    .stat-label {
+        opacity: 0.7;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title("🎬 Movie Manager")
+
+st.sidebar.markdown("---")
+
+user = st.sidebar.selectbox(
+    "Who's using the app?",
+    ["Anthony", "Kseniia"],
+)
+
+
+st.sidebar.markdown("---")
+
+page = st.sidebar.radio(
+    "Navigation",
+    [
+        "🏠 Home",
+        "🔎 Movie Search",
+        "📋 My Watchlist",
+        "🎬 Watched",
+        "⭐ My Ratings",
+        "❤️ My Favourites",
+        "👥 Our Movies",
+        "👤 My Profile",
+    ],
+)
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def safe_value(value, default=""):
+    if value is None:
+        return default
+    return value
+
+
+def rating_display(rating):
+    if rating is None:
+        return "Not rated"
+
+    return f"{float(rating):.1f}/5"
+
+
+# ============================================================
+# HOME
+# ============================================================
+
+if page == "🏠 Home":
+
+    st.markdown(
+        '<div class="main-title">🎬 Movie Manager</div>',
+        unsafe_allow_html=True,
     )
 
-    conn.row_factory = sqlite3.Row
+    st.markdown(
+        f'<div class="subtitle">Welcome, {user}</div>',
+        unsafe_allow_html=True,
+    )
 
-    try:
-        # Improve SQLite reliability
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
+    stats = get_user_statistics(user)
 
-        yield conn
+    col1, col2, col3, col4, col5 = st.columns(5)
 
-    finally:
-        conn.close()
+    with col1:
+        st.metric(
+            "🎬 Watched",
+            stats["watched"],
+        )
+
+    with col2:
+        st.metric(
+            "📋 Watchlist",
+            stats["watchlist"],
+        )
+
+    with col3:
+        st.metric(
+            "⭐ Rated",
+            stats["rated"],
+        )
+
+    with col4:
+        st.metric(
+            "❤️ Favourites",
+            stats["favourites"],
+        )
+
+    with col5:
+        average = stats["average_rating"]
+
+        if average is None:
+            average = "—"
+
+        st.metric(
+            "⭐ Average",
+            average,
+        )
+
+    st.markdown("---")
+
+    st.subheader("📋 Your Watchlist")
+
+    watchlist = get_watchlist(user)
+
+    if watchlist.empty:
+
+        st.info(
+            "Your watchlist is empty. "
+            "Use Movie Search to add some films."
+        )
+
+    else:
+
+        st.dataframe(
+            watchlist,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown("---")
+
+    st.subheader("🎬 Recently Watched")
+
+    history = get_watch_history(
+        user,
+        limit=10,
+    )
+
+    if history.empty:
+
+        st.info(
+            "You haven't recorded any films yet."
+        )
+
+    else:
+
+        st.dataframe(
+            history,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # ============================================================
-# DATABASE INITIALISATION
+# MOVIE SEARCH
 # ============================================================
 
-def init_db():
-    """
-    Create all database tables if they don't already exist.
-    """
-
-    with get_connection() as conn:
-
-        cursor = conn.cursor()
-
-        # ----------------------------------------------------
-        # USERS
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                display_name TEXT NOT NULL,
-                date_created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # ----------------------------------------------------
-        # MOVIES
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS movies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                tmdb_id INTEGER NOT NULL UNIQUE,
-
-                title TEXT NOT NULL,
-                original_title TEXT,
-
-                overview TEXT,
-
-                release_date TEXT,
-
-                runtime INTEGER,
-
-                vote_average REAL,
-                vote_count INTEGER,
-
-                poster_path TEXT,
-                backdrop_path TEXT,
-
-                trailer_url TEXT,
-
-                date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # ----------------------------------------------------
-        # GENRES
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS genres (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                tmdb_id INTEGER NOT NULL UNIQUE,
-
-                name TEXT NOT NULL UNIQUE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # MOVIE / GENRE RELATIONSHIP
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS movie_genres (
-                movie_id INTEGER NOT NULL,
-                genre_id INTEGER NOT NULL,
-
-                PRIMARY KEY (movie_id, genre_id),
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (genre_id)
-                    REFERENCES genres(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # PEOPLE
-        #
-        # Used for actors, directors and other crew.
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS people (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                tmdb_id INTEGER NOT NULL UNIQUE,
-
-                name TEXT NOT NULL,
-
-                profile_path TEXT,
-
-                known_for_department TEXT
-            )
-        """)
-
-        # ----------------------------------------------------
-        # MOVIE / PEOPLE
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS movie_people (
-                movie_id INTEGER NOT NULL,
-                person_id INTEGER NOT NULL,
-
-                role TEXT NOT NULL,
-
-                character_name TEXT,
-
-                PRIMARY KEY (movie_id, person_id, role),
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (person_id)
-                    REFERENCES people(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # KEYWORDS
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS keywords (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                tmdb_id INTEGER NOT NULL UNIQUE,
-
-                name TEXT NOT NULL UNIQUE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # MOVIE / KEYWORDS
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS movie_keywords (
-                movie_id INTEGER NOT NULL,
-                keyword_id INTEGER NOT NULL,
-
-                PRIMARY KEY (movie_id, keyword_id),
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (keyword_id)
-                    REFERENCES keywords(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # WATCHLIST
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS watchlist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                user_id INTEGER NOT NULL,
-                movie_id INTEGER NOT NULL,
-
-                priority INTEGER DEFAULT 3,
-
-                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                notes TEXT,
-
-                UNIQUE(user_id, movie_id),
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # WATCH HISTORY
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS watch_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                movie_id INTEGER NOT NULL,
-
-                watched_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                viewing_type TEXT DEFAULT 'watched',
-
-                notes TEXT,
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # VIEWERS
-        #
-        # Allows a movie to be watched by:
-        # Anthony
-        # Kseniia
-        # Both
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS watch_history_users (
-                watch_history_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-
-                PRIMARY KEY (watch_history_id, user_id),
-
-                FOREIGN KEY (watch_history_id)
-                    REFERENCES watch_history(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # RATINGS
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS ratings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                user_id INTEGER NOT NULL,
-                movie_id INTEGER NOT NULL,
-
-                rating REAL NOT NULL,
-
-                review TEXT,
-
-                is_favourite INTEGER DEFAULT 0,
-
-                date_rated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                UNIQUE(user_id, movie_id),
-
-                CHECK(rating >= 0.5 AND rating <= 5.0),
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # MOVIE STATUS
-        #
-        # Allows each person to have their own status.
-        #
-        # want_to_watch
-        # watching
-        # watched
-        # dropped
-        # rewatch
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS movie_status (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                user_id INTEGER NOT NULL,
-                movie_id INTEGER NOT NULL,
-
-                status TEXT NOT NULL DEFAULT 'want_to_watch',
-
-                date_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                UNIQUE(user_id, movie_id),
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # PROFILE QUESTIONNAIRE
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_profiles (
-                user_id INTEGER PRIMARY KEY,
-
-                pacing_pref TEXT,
-
-                tone_tags TEXT,
-
-                preferred_decades TEXT,
-
-                preferred_certificates TEXT,
-
-                preferred_runtime TEXT,
-
-                favourite_actors TEXT,
-
-                favourite_directors TEXT,
-
-                disliked_actors TEXT,
-
-                disliked_directors TEXT,
-
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # USER FAVOURITE GENRES
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_favourite_genres (
-                user_id INTEGER NOT NULL,
-                genre_id INTEGER NOT NULL,
-
-                PRIMARY KEY (user_id, genre_id),
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (genre_id)
-                    REFERENCES genres(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # USER EXCLUDED GENRES
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_excluded_genres (
-                user_id INTEGER NOT NULL,
-                genre_id INTEGER NOT NULL,
-
-                PRIMARY KEY (user_id, genre_id),
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE CASCADE,
-
-                FOREIGN KEY (genre_id)
-                    REFERENCES genres(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # SEARCH HISTORY
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS search_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                user_id INTEGER,
-
-                search_term TEXT NOT NULL,
-
-                search_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE SET NULL
-            )
-        """)
-
-        # ----------------------------------------------------
-        # RECOMMENDATION HISTORY
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS recommendation_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                user_id INTEGER,
-
-                movie_id INTEGER NOT NULL,
-
-                recommendation_score REAL,
-
-                reason TEXT,
-
-                date_recommended TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                FOREIGN KEY (user_id)
-                    REFERENCES users(id)
-                    ON DELETE SET NULL,
-
-                FOREIGN KEY (movie_id)
-                    REFERENCES movies(id)
-                    ON DELETE CASCADE
-            )
-        """)
-
-        # ----------------------------------------------------
-        # INDEXES
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_movies_tmdb
-            ON movies(tmdb_id)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ratings_user
-            ON ratings(user_id)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ratings_movie
-            ON ratings(movie_id)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_watchlist_user
-            ON watchlist(user_id)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_status_user
-            ON movie_status(user_id)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_history_movie
-            ON watch_history(movie_id)
-        """)
-
-        # ----------------------------------------------------
-        # DEFAULT USERS
-        # ----------------------------------------------------
-
-        for username in DEFAULT_USERS:
-
-            cursor.execute("""
-                INSERT OR IGNORE INTO users
-                (username, display_name)
-                VALUES (?, ?)
-            """, (username, username))
-
-        conn.commit()
-
-
-# ============================================================
-# USER FUNCTIONS
-# ============================================================
-
-def get_user(user_name: str):
-    """
-    Return a user row by name.
-    """
-
-    with get_connection() as conn:
-
-        row = conn.execute("""
-            SELECT *
-            FROM users
-            WHERE username = ?
-        """, (user_name,)).fetchone()
-
-        return row
-
-
-def get_all_users() -> pd.DataFrame:
-    """
-    Return all users.
-    """
-
-    with get_connection() as conn:
-
-        return pd.read_sql_query("""
-            SELECT
-                id,
-                username,
-                display_name,
-                date_created
-            FROM users
-            ORDER BY display_name
-        """, conn)
-
-
-# ============================================================
-# MOVIE FUNCTIONS
-# ============================================================
-
-def add_movie(
-    tmdb_id: int,
-    title: str,
-    original_title: Optional[str] = None,
-    overview: Optional[str] = None,
-    release_date: Optional[str] = None,
-    runtime: Optional[int] = None,
-    vote_average: Optional[float] = None,
-    vote_count: Optional[int] = None,
-    poster_path: Optional[str] = None,
-    backdrop_path: Optional[str] = None,
-    trailer_url: Optional[str] = None
-):
-    """
-    Add or update a movie.
-
-    Returns the internal movie database ID.
-    """
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO movies (
-                tmdb_id,
-                title,
-                original_title,
-                overview,
-                release_date,
-                runtime,
-                vote_average,
-                vote_count,
-                poster_path,
-                backdrop_path,
-                trailer_url
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-            ON CONFLICT(tmdb_id)
-            DO UPDATE SET
-
-                title = excluded.title,
-                original_title = excluded.original_title,
-                overview = excluded.overview,
-                release_date = excluded.release_date,
-                runtime = excluded.runtime,
-                vote_average = excluded.vote_average,
-                vote_count = excluded.vote_count,
-                poster_path = excluded.poster_path,
-                backdrop_path = excluded.backdrop_path,
-                trailer_url = excluded.trailer_url,
-
-                last_updated = CURRENT_TIMESTAMP
-        """, (
-            tmdb_id,
-            title,
-            original_title,
-            overview,
-            release_date,
-            runtime,
-            vote_average,
-            vote_count,
-            poster_path,
-            backdrop_path,
-            trailer_url
-        ))
-
-        conn.commit()
-
-        row = conn.execute("""
-            SELECT id
-            FROM movies
-            WHERE tmdb_id = ?
-        """, (tmdb_id,)).fetchone()
-
-        return row["id"]
-
-
-def get_movie_by_tmdb_id(tmdb_id: int):
-    """
-    Get a movie using its TMDB ID.
-    """
-
-    with get_connection() as conn:
-
-        return conn.execute("""
-            SELECT *
-            FROM movies
-            WHERE tmdb_id = ?
-        """, (tmdb_id,)).fetchone()
-
-
-def get_movie(movie_id: int):
-    """
-    Get a movie using the internal ID.
-    """
-
-    with get_connection() as conn:
-
-        return conn.execute("""
-            SELECT *
-            FROM movies
-            WHERE id = ?
-        """, (movie_id,)).fetchone()
-
-
-# ============================================================
-# GENRE FUNCTIONS
-# ============================================================
-
-def add_genre(tmdb_id: int, name: str):
-    """
-    Add or retrieve a genre.
-    """
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO genres (tmdb_id, name)
-            VALUES (?, ?)
-
-            ON CONFLICT(tmdb_id)
-            DO UPDATE SET name = excluded.name
-        """, (tmdb_id, name))
-
-        conn.commit()
-
-        row = conn.execute("""
-            SELECT id
-            FROM genres
-            WHERE tmdb_id = ?
-        """, (tmdb_id,)).fetchone()
-
-        return row["id"]
-
-
-def attach_genre_to_movie(movie_id: int, genre_id: int):
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT OR IGNORE INTO movie_genres
-            (movie_id, genre_id)
-            VALUES (?, ?)
-        """, (movie_id, genre_id))
-
-        conn.commit()
-
-
-# ============================================================
-# PEOPLE
-# ============================================================
-
-def add_person(
-    tmdb_id: int,
-    name: str,
-    profile_path: Optional[str] = None,
-    known_for_department: Optional[str] = None
-):
-    """
-    Add or update an actor/director/etc.
-    """
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO people (
-                tmdb_id,
-                name,
-                profile_path,
-                known_for_department
-            )
-            VALUES (?, ?, ?, ?)
-
-            ON CONFLICT(tmdb_id)
-            DO UPDATE SET
-
-                name = excluded.name,
-                profile_path = excluded.profile_path,
-                known_for_department = excluded.known_for_department
-        """, (
-            tmdb_id,
-            name,
-            profile_path,
-            known_for_department
-        ))
-
-        conn.commit()
-
-        row = conn.execute("""
-            SELECT id
-            FROM people
-            WHERE tmdb_id = ?
-        """, (tmdb_id,)).fetchone()
-
-        return row["id"]
-
-
-def attach_person_to_movie(
-    movie_id: int,
-    person_id: int,
-    role: str,
-    character_name: Optional[str] = None
-):
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT OR REPLACE INTO movie_people
-            (
-                movie_id,
-                person_id,
-                role,
-                character_name
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            movie_id,
-            person_id,
-            role,
-            character_name
-        ))
-
-        conn.commit()
-
-
-# ============================================================
-# KEYWORDS
-# ============================================================
-
-def add_keyword(tmdb_id: int, name: str):
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO keywords (tmdb_id, name)
-            VALUES (?, ?)
-
-            ON CONFLICT(tmdb_id)
-            DO UPDATE SET name = excluded.name
-        """, (tmdb_id, name))
-
-        conn.commit()
-
-        row = conn.execute("""
-            SELECT id
-            FROM keywords
-            WHERE tmdb_id = ?
-        """, (tmdb_id,)).fetchone()
-
-        return row["id"]
-
-
-def attach_keyword_to_movie(movie_id: int, keyword_id: int):
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT OR IGNORE INTO movie_keywords
-            (movie_id, keyword_id)
-            VALUES (?, ?)
-        """, (movie_id, keyword_id))
-
-        conn.commit()
+elif page == "🔎 Movie Search":
+
+    st.title("🔎 Movie Search")
+
+    st.info(
+        "TMDB search will be connected here next. "
+        "For now you can manually add a movie using its TMDB ID."
+    )
+
+    st.markdown("---")
+
+    st.subheader("➕ Add Movie")
+
+    with st.form("add_movie_form"):
+
+        tmdb_id = st.number_input(
+            "TMDB Movie ID",
+            min_value=1,
+            step=1,
+        )
+
+        title = st.text_input(
+            "Movie title"
+        )
+
+        original_title = st.text_input(
+            "Original title"
+        )
+
+        overview = st.text_area(
+            "Overview"
+        )
+
+        release_date = st.text_input(
+            "Release date",
+            placeholder="2026-01-01",
+        )
+
+        runtime = st.number_input(
+            "Runtime (minutes)",
+            min_value=0,
+            max_value=500,
+            value=0,
+        )
+
+        vote_average = st.number_input(
+            "TMDB rating",
+            min_value=0.0,
+            max_value=10.0,
+            value=0.0,
+            step=0.1,
+        )
+
+        poster_path = st.text_input(
+            "Poster path / URL"
+        )
+
+        backdrop_path = st.text_input(
+            "Backdrop path / URL"
+        )
+
+        trailer_url = st.text_input(
+            "Trailer URL"
+        )
+
+        submitted = st.form_submit_button(
+            "Add Movie"
+        )
+
+        if submitted:
+
+            if not title.strip():
+
+                st.error(
+                    "Please enter a movie title."
+                )
+
+            else:
+
+                movie_id = add_movie(
+                    tmdb_id=int(tmdb_id),
+                    title=title.strip(),
+                    original_title=original_title.strip()
+                    or None,
+                    overview=overview.strip()
+                    or None,
+                    release_date=release_date.strip()
+                    or None,
+                    runtime=int(runtime)
+                    if runtime > 0
+                    else None,
+                    vote_average=float(vote_average)
+                    if vote_average > 0
+                    else None,
+                    poster_path=poster_path.strip()
+                    or None,
+                    backdrop_path=backdrop_path.strip()
+                    or None,
+                    trailer_url=trailer_url.strip()
+                    or None,
+                )
+
+                st.success(
+                    f"Movie added successfully. "
+                    f"Database ID: {movie_id}"
+                )
 
 
 # ============================================================
 # WATCHLIST
 # ============================================================
 
-def add_to_watchlist(
-    user_name: str,
-    tmdb_id: int,
-    priority: int = 3,
-    notes: Optional[str] = None
-):
-    """
-    Add a movie to a user's watchlist.
-    """
+elif page == "📋 My Watchlist":
 
-    user = get_user(user_name)
-    movie = get_movie_by_tmdb_id(tmdb_id)
+    st.title(
+        f"📋 {user}'s Watchlist"
+    )
 
-    if not user:
-        raise ValueError(f"User '{user_name}' does not exist.")
+    watchlist = get_watchlist(user)
 
-    if not movie:
-        raise ValueError(
-            f"Movie with TMDB ID {tmdb_id} does not exist."
+    if watchlist.empty:
+
+        st.info(
+            "Your watchlist is empty."
         )
 
-    priority = max(1, min(5, int(priority)))
+    else:
 
-    with get_connection() as conn:
+        st.dataframe(
+            watchlist,
+            use_container_width=True,
+            hide_index=True,
+        )
 
-        conn.execute("""
-            INSERT INTO watchlist (
-                user_id,
-                movie_id,
-                priority,
-                notes
+    st.markdown("---")
+
+    st.subheader("➕ Add to Watchlist")
+
+    with st.form("watchlist_form"):
+
+        tmdb_id = st.number_input(
+            "TMDB Movie ID",
+            min_value=1,
+            step=1,
+        )
+
+        priority = st.slider(
+            "Priority",
+            min_value=1,
+            max_value=5,
+            value=3,
+        )
+
+        notes = st.text_area(
+            "Notes"
+        )
+
+        submitted = st.form_submit_button(
+            "Add to Watchlist"
+        )
+
+        if submitted:
+
+            movie = get_movie_by_tmdb_id(
+                int(tmdb_id)
             )
-            VALUES (?, ?, ?, ?)
 
-            ON CONFLICT(user_id, movie_id)
-            DO UPDATE SET
+            if not movie:
 
-                priority = excluded.priority,
-                notes = excluded.notes
-        """, (
-            user["id"],
-            movie["id"],
-            priority,
-            notes
-        ))
+                st.error(
+                    "That movie isn't in the database yet."
+                )
 
-        conn.commit()
+            else:
 
+                add_to_watchlist(
+                    user,
+                    int(tmdb_id),
+                    priority,
+                    notes or None,
+                )
 
-def remove_from_watchlist(
-    user_name: str,
-    tmdb_id: int
-):
+                st.success(
+                    f"{movie['title']} added to "
+                    f"{user}'s watchlist."
+                )
 
-    user = get_user(user_name)
-    movie = get_movie_by_tmdb_id(tmdb_id)
-
-    if not user or not movie:
-        return
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            DELETE FROM watchlist
-            WHERE user_id = ?
-            AND movie_id = ?
-        """, (
-            user["id"],
-            movie["id"]
-        ))
-
-        conn.commit()
-
-
-def get_watchlist(
-    user_name: Optional[str] = None
-) -> pd.DataFrame:
-    """
-    Get a user's watchlist.
-
-    If user_name is None, return everybody's watchlist.
-    """
-
-    with get_connection() as conn:
-
-        query = """
-            SELECT
-                u.display_name AS Viewer,
-                m.tmdb_id AS TMDB_ID,
-                m.title AS Title,
-                m.release_date AS Release_Date,
-                m.vote_average AS TMDB_Rating,
-                w.priority AS Priority,
-                w.notes AS Notes,
-                w.added_date AS Added
-            FROM watchlist w
-
-            JOIN users u
-                ON u.id = w.user_id
-
-            JOIN movies m
-                ON m.id = w.movie_id
-        """
-
-        params = []
-
-        if user_name:
-
-            query += """
-                WHERE u.username = ?
-            """
-
-            params.append(user_name)
-
-        query += """
-            ORDER BY
-                w.priority DESC,
-                w.added_date DESC
-        """
-
-        return pd.read_sql_query(
-            query,
-            conn,
-            params=params
-        )
+                st.rerun()
 
 
 # ============================================================
-# MOVIE STATUS
+# WATCHED
 # ============================================================
 
-VALID_STATUSES = {
-    "want_to_watch",
-    "watching",
-    "watched",
-    "dropped",
-    "rewatch"
-}
+elif page == "🎬 Watched":
 
+    st.title(
+        f"🎬 {user}'s Watched Movies"
+    )
 
-def set_movie_status(
-    user_name: str,
-    tmdb_id: int,
-    status: str
-):
+    history = get_watch_history(
+        user,
+        limit=100,
+    )
 
-    status = status.lower().strip()
+    if history.empty:
 
-    if status not in VALID_STATUSES:
-        raise ValueError(
-            f"Invalid status '{status}'. "
-            f"Valid statuses: {sorted(VALID_STATUSES)}"
+        st.info(
+            "No watched movies have been recorded yet."
         )
 
-    user = get_user(user_name)
-    movie = get_movie_by_tmdb_id(tmdb_id)
+    else:
 
-    if not user or not movie:
-        raise ValueError("User or movie not found.")
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO movie_status (
-                user_id,
-                movie_id,
-                status
-            )
-            VALUES (?, ?, ?)
-
-            ON CONFLICT(user_id, movie_id)
-            DO UPDATE SET
-
-                status = excluded.status,
-                date_updated = CURRENT_TIMESTAMP
-        """, (
-            user["id"],
-            movie["id"],
-            status
-        ))
-
-        conn.commit()
-
-
-def get_movie_status(
-    user_name: str,
-    tmdb_id: int
-):
-
-    user = get_user(user_name)
-    movie = get_movie_by_tmdb_id(tmdb_id)
-
-    if not user or not movie:
-        return None
-
-    with get_connection() as conn:
-
-        row = conn.execute("""
-            SELECT status
-            FROM movie_status
-            WHERE user_id = ?
-            AND movie_id = ?
-        """, (
-            user["id"],
-            movie["id"]
-        )).fetchone()
-
-        return row["status"] if row else None
-
-
-# ============================================================
-# WATCH HISTORY
-# ============================================================
-
-def log_watched_movie(
-    viewers,
-    tmdb_id: int,
-    watched_date: Optional[str] = None,
-    viewing_type: str = "watched",
-    notes: Optional[str] = None
-):
-    """
-    Log a movie being watched.
-
-    viewers can be:
-
-        "Anthony"
-        "Kseniia"
-
-    or:
-
-        ["Anthony", "Kseniia"]
-    """
-
-    if isinstance(viewers, str):
-        viewers = [viewers]
-
-    movie = get_movie_by_tmdb_id(tmdb_id)
-
-    if not movie:
-        raise ValueError(
-            f"Movie with TMDB ID {tmdb_id} does not exist."
+        st.dataframe(
+            history,
+            use_container_width=True,
+            hide_index=True,
         )
 
-    if not watched_date:
-        watched_date = datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
+    st.markdown("---")
+
+    st.subheader("➕ Record a Movie")
+
+    with st.form("watched_form"):
+
+        tmdb_id = st.number_input(
+            "TMDB Movie ID",
+            min_value=1,
+            step=1,
         )
 
-    with get_connection() as conn:
-
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            INSERT INTO watch_history (
-                movie_id,
-                watched_date,
-                viewing_type,
-                notes
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            movie["id"],
-            watched_date,
-            viewing_type,
-            notes
-        ))
-
-        history_id = cursor.lastrowid
-
-        for viewer in viewers:
-
-            user = get_user(viewer)
-
-            if not user:
-                raise ValueError(
-                    f"User '{viewer}' does not exist."
-                )
-
-            cursor.execute("""
-                INSERT INTO watch_history_users
-                (
-                    watch_history_id,
-                    user_id
-                )
-                VALUES (?, ?)
-            """, (
-                history_id,
-                user["id"]
-            ))
-
-            # Automatically mark as watched
-            cursor.execute("""
-                INSERT INTO movie_status (
-                    user_id,
-                    movie_id,
-                    status
-                )
-                VALUES (?, ?, 'watched')
-
-                ON CONFLICT(user_id, movie_id)
-                DO UPDATE SET
-
-                    status = 'watched',
-                    date_updated = CURRENT_TIMESTAMP
-            """, (
-                user["id"],
-                movie["id"]
-            ))
-
-            # Remove from watchlist
-            cursor.execute("""
-                DELETE FROM watchlist
-                WHERE user_id = ?
-                AND movie_id = ?
-            """, (
-                user["id"],
-                movie["id"]
-            ))
-
-        conn.commit()
-
-        return history_id
-
-
-def get_watch_history(
-    user_name: Optional[str] = None,
-    limit: int = 50
-) -> pd.DataFrame:
-    """
-    Get watch history.
-
-    If user_name is supplied, only return movies
-    watched by that person.
-    """
-
-    limit = max(1, min(int(limit), 1000))
-
-    with get_connection() as conn:
-
-        query = """
-            SELECT
-                wh.id AS Watch_ID,
-
-                m.tmdb_id AS TMDB_ID,
-
-                m.title AS Title,
-
-                GROUP_CONCAT(
-                    DISTINCT u.display_name
-                ) AS Viewers,
-
-                wh.viewing_type AS Type,
-
-                wh.watched_date AS Watched,
-
-                wh.notes AS Notes
-
-            FROM watch_history wh
-
-            JOIN movies m
-                ON m.id = wh.movie_id
-
-            JOIN watch_history_users whu
-                ON whu.watch_history_id = wh.id
-
-            JOIN users u
-                ON u.id = whu.user_id
-        """
-
-        params = []
-
-        if user_name:
-
-            query += """
-                WHERE wh.id IN (
-                    SELECT whu2.watch_history_id
-
-                    FROM watch_history_users whu2
-
-                    JOIN users u2
-                        ON u2.id = whu2.user_id
-
-                    WHERE u2.username = ?
-                )
-            """
-
-            params.append(user_name)
-
-        query += """
-            GROUP BY wh.id
-            ORDER BY wh.id DESC
-            LIMIT ?
-        """
-
-        params.append(limit)
-
-        return pd.read_sql_query(
-            query,
-            conn,
-            params=params
+        viewers = st.multiselect(
+            "Who watched it?",
+            [
+                "Anthony",
+                "Kseniia",
+            ],
+            default=[user],
         )
+
+        viewing_type = st.selectbox(
+            "Viewing type",
+            [
+                "watched",
+                "rewatch",
+            ],
+        )
+
+        notes = st.text_area(
+            "Notes"
+        )
+
+        submitted = st.form_submit_button(
+            "Record Movie"
+        )
+
+        if submitted:
+
+            if not viewers:
+
+                st.error(
+                    "Select at least one viewer."
+                )
+
+            else:
+
+                movie = get_movie_by_tmdb_id(
+                    int(tmdb_id)
+                )
+
+                if not movie:
+
+                    st.error(
+                        "That movie isn't in the database yet."
+                    )
+
+                else:
+
+                    log_watched_movie(
+                        viewers,
+                        int(tmdb_id),
+                        viewing_type=viewing_type,
+                        notes=notes or None,
+                    )
+
+                    st.success(
+                        f"{movie['title']} recorded."
+                    )
+
+                    st.rerun()
 
 
 # ============================================================
 # RATINGS
 # ============================================================
 
-def save_rating(
-    user_name: str,
-    tmdb_id: int,
-    rating: float,
-    review: Optional[str] = None,
-    is_favourite: bool = False
-):
-    """
-    Save or update a user's rating.
-    """
+elif page == "⭐ My Ratings":
 
-    rating = float(rating)
+    st.title(
+        f"⭐ {user}'s Ratings"
+    )
 
-    if rating < 0.5 or rating > 5:
-        raise ValueError(
-            "Rating must be between 0.5 and 5.0."
+    ratings = get_ratings(user)
+
+    if ratings.empty:
+
+        st.info(
+            "You haven't rated any movies yet."
         )
 
-    user = get_user(user_name)
-    movie = get_movie_by_tmdb_id(tmdb_id)
+    else:
 
-    if not user or not movie:
-        raise ValueError("User or movie not found.")
+        st.dataframe(
+            ratings,
+            use_container_width=True,
+            hide_index=True,
+        )
 
-    with get_connection() as conn:
+    st.markdown("---")
 
-        conn.execute("""
-            INSERT INTO ratings (
-                user_id,
-                movie_id,
-                rating,
-                review,
-                is_favourite
+    st.subheader("⭐ Rate a Movie")
+
+    with st.form("rating_form"):
+
+        tmdb_id = st.number_input(
+            "TMDB Movie ID",
+            min_value=1,
+            step=1,
+        )
+
+        rating = st.slider(
+            "Your rating",
+            min_value=0.5,
+            max_value=5.0,
+            value=3.0,
+            step=0.5,
+        )
+
+        review = st.text_area(
+            "Review / notes"
+        )
+
+        favourite = st.checkbox(
+            "❤️ Add to favourites"
+        )
+
+        submitted = st.form_submit_button(
+            "Save Rating"
+        )
+
+        if submitted:
+
+            movie = get_movie_by_tmdb_id(
+                int(tmdb_id)
             )
-            VALUES (?, ?, ?, ?, ?)
 
-            ON CONFLICT(user_id, movie_id)
-            DO UPDATE SET
+            if not movie:
 
-                rating = excluded.rating,
-                review = excluded.review,
-                is_favourite = excluded.is_favourite,
-                last_updated = CURRENT_TIMESTAMP
-        """, (
-            user["id"],
-            movie["id"],
-            rating,
-            review,
-            int(is_favourite)
-        ))
+                st.error(
+                    "That movie isn't in the database yet."
+                )
 
-        conn.commit()
+            else:
 
+                save_rating(
+                    user,
+                    int(tmdb_id),
+                    rating,
+                    review or None,
+                    favourite,
+                )
 
-def get_user_rating(
-    user_name: str,
-    tmdb_id: int
-):
+                st.success(
+                    f"{movie['title']} rated "
+                    f"{rating:.1f}/5."
+                )
 
-    user = get_user(user_name)
-    movie = get_movie_by_tmdb_id(tmdb_id)
-
-    if not user or not movie:
-        return None
-
-    with get_connection() as conn:
-
-        row = conn.execute("""
-            SELECT
-                rating,
-                review,
-                is_favourite
-            FROM ratings
-            WHERE user_id = ?
-            AND movie_id = ?
-        """, (
-            user["id"],
-            movie["id"]
-        )).fetchone()
-
-        if not row:
-            return None
-
-        return {
-            "rating": row["rating"],
-            "review": row["review"],
-            "is_favourite": bool(row["is_favourite"])
-        }
-
-
-def get_ratings(
-    user_name: Optional[str] = None
-) -> pd.DataFrame:
-
-    with get_connection() as conn:
-
-        query = """
-            SELECT
-                u.display_name AS Viewer,
-
-                m.tmdb_id AS TMDB_ID,
-
-                m.title AS Title,
-
-                r.rating AS Rating,
-
-                r.review AS Review,
-
-                r.is_favourite AS Favourite,
-
-                r.date_rated AS Date_Rated
-
-            FROM ratings r
-
-            JOIN users u
-                ON u.id = r.user_id
-
-            JOIN movies m
-                ON m.id = r.movie_id
-        """
-
-        params = []
-
-        if user_name:
-
-            query += """
-                WHERE u.username = ?
-            """
-
-            params.append(user_name)
-
-        query += """
-            ORDER BY r.last_updated DESC
-        """
-
-        return pd.read_sql_query(
-            query,
-            conn,
-            params=params
-        )
+                st.rerun()
 
 
 # ============================================================
 # FAVOURITES
 # ============================================================
 
-def set_favourite(
-    user_name: str,
-    tmdb_id: int,
-    favourite: bool = True
-):
+elif page == "❤️ My Favourites":
 
-    user = get_user(user_name)
-    movie = get_movie_by_tmdb_id(tmdb_id)
-
-    if not user or not movie:
-        raise ValueError("User or movie not found.")
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            UPDATE ratings
-
-            SET
-                is_favourite = ?,
-                last_updated = CURRENT_TIMESTAMP
-
-            WHERE user_id = ?
-            AND movie_id = ?
-        """, (
-            int(favourite),
-            user["id"],
-            movie["id"]
-        ))
-
-        conn.commit()
-
-
-def get_favourites(
-    user_name: str
-) -> pd.DataFrame:
-
-    with get_connection() as conn:
-
-        return pd.read_sql_query("""
-            SELECT
-                m.tmdb_id AS TMDB_ID,
-                m.title AS Title,
-                r.rating AS Rating,
-                r.review AS Review,
-                m.poster_path AS Poster
-            FROM ratings r
-
-            JOIN users u
-                ON u.id = r.user_id
-
-            JOIN movies m
-                ON m.id = r.movie_id
-
-            WHERE u.username = ?
-            AND r.is_favourite = 1
-
-            ORDER BY r.rating DESC
-        """, conn, params=(user_name,))
-
-
-# ============================================================
-# USER PROFILE
-# ============================================================
-
-def save_user_profile(
-    user_name: str,
-    pacing: Optional[str] = None,
-    tones: Optional[List[str]] = None,
-    decades: Optional[List[str]] = None,
-    certificates: Optional[List[str]] = None,
-    runtime: Optional[str] = None,
-    favourite_actors: Optional[List[str]] = None,
-    favourite_directors: Optional[List[str]] = None,
-    disliked_actors: Optional[List[str]] = None,
-    disliked_directors: Optional[List[str]] = None
-):
-
-    user = get_user(user_name)
-
-    if not user:
-        raise ValueError(
-            f"User '{user_name}' does not exist."
-        )
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO user_profiles (
-                user_id,
-                pacing_pref,
-                tone_tags,
-                preferred_decades,
-                preferred_certificates,
-                preferred_runtime,
-                favourite_actors,
-                favourite_directors,
-                disliked_actors,
-                disliked_directors
-            )
-
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-            ON CONFLICT(user_id)
-            DO UPDATE SET
-
-                pacing_pref =
-                    excluded.pacing_pref,
-
-                tone_tags =
-                    excluded.tone_tags,
-
-                preferred_decades =
-                    excluded.preferred_decades,
-
-                preferred_certificates =
-                    excluded.preferred_certificates,
-
-                preferred_runtime =
-                    excluded.preferred_runtime,
-
-                favourite_actors =
-                    excluded.favourite_actors,
-
-                favourite_directors =
-                    excluded.favourite_directors,
-
-                disliked_actors =
-                    excluded.disliked_actors,
-
-                disliked_directors =
-                    excluded.disliked_directors,
-
-                last_updated =
-                    CURRENT_TIMESTAMP
-        """, (
-            user["id"],
-            pacing,
-            json.dumps(tones or []),
-            json.dumps(decades or []),
-            json.dumps(certificates or []),
-            runtime,
-            json.dumps(favourite_actors or []),
-            json.dumps(favourite_directors or []),
-            json.dumps(disliked_actors or []),
-            json.dumps(disliked_directors or [])
-        ))
-
-        conn.commit()
-
-
-def get_user_profile(
-    user_name: str
-):
-
-    user = get_user(user_name)
-
-    if not user:
-        return None
-
-    with get_connection() as conn:
-
-        row = conn.execute("""
-            SELECT *
-            FROM user_profiles
-            WHERE user_id = ?
-        """, (user["id"],)).fetchone()
-
-        if not row:
-            return None
-
-        return {
-            "pacing": row["pacing_pref"],
-
-            "tones": json.loads(
-                row["tone_tags"] or "[]"
-            ),
-
-            "decades": json.loads(
-                row["preferred_decades"] or "[]"
-            ),
-
-            "certificates": json.loads(
-                row["preferred_certificates"] or "[]"
-            ),
-
-            "runtime": row["preferred_runtime"],
-
-            "favourite_actors": json.loads(
-                row["favourite_actors"] or "[]"
-            ),
-
-            "favourite_directors": json.loads(
-                row["favourite_directors"] or "[]"
-            ),
-
-            "disliked_actors": json.loads(
-                row["disliked_actors"] or "[]"
-            ),
-
-            "disliked_directors": json.loads(
-                row["disliked_directors"] or "[]"
-            )
-        }
-
-
-# ============================================================
-# PROFILE GENRES
-# ============================================================
-
-def set_favourite_genres(
-    user_name: str,
-    genre_ids: List[int]
-):
-
-    user = get_user(user_name)
-
-    if not user:
-        raise ValueError("User not found.")
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            DELETE FROM user_favourite_genres
-            WHERE user_id = ?
-        """, (user["id"],))
-
-        for genre_id in genre_ids:
-
-            conn.execute("""
-                INSERT OR IGNORE INTO user_favourite_genres
-                (user_id, genre_id)
-                VALUES (?, ?)
-            """, (
-                user["id"],
-                genre_id
-            ))
-
-        conn.commit()
-
-
-def set_excluded_genres(
-    user_name: str,
-    genre_ids: List[int]
-):
-
-    user = get_user(user_name)
-
-    if not user:
-        raise ValueError("User not found.")
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            DELETE FROM user_excluded_genres
-            WHERE user_id = ?
-        """, (user["id"],))
-
-        for genre_id in genre_ids:
-
-            conn.execute("""
-                INSERT OR IGNORE INTO user_excluded_genres
-                (user_id, genre_id)
-                VALUES (?, ?)
-            """, (
-                user["id"],
-                genre_id
-            ))
-
-        conn.commit()
-
-
-# ============================================================
-# SEARCH HISTORY
-# ============================================================
-
-def log_search(
-    user_name: Optional[str],
-    search_term: str
-):
-
-    user_id = None
-
-    if user_name:
-
-        user = get_user(user_name)
-
-        if user:
-            user_id = user["id"]
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO search_history
-            (
-                user_id,
-                search_term
-            )
-            VALUES (?, ?)
-        """, (
-            user_id,
-            search_term
-        ))
-
-        conn.commit()
-
-
-# ============================================================
-# TWO-PERSON COMPATIBILITY
-# ============================================================
-
-def get_shared_watched_movies() -> pd.DataFrame:
-    """
-    Return movies watched by both Anthony and Kseniia.
-    """
-
-    with get_connection() as conn:
-
-        return pd.read_sql_query("""
-            SELECT
-                m.tmdb_id AS TMDB_ID,
-                m.title AS Title,
-
-                MAX(
-                    CASE
-                        WHEN u.username = 'Anthony'
-                        THEN r.rating
-                    END
-                ) AS Anthony_Rating,
-
-                MAX(
-                    CASE
-                        WHEN u.username = 'Kseniia'
-                        THEN r.rating
-                    END
-                ) AS Kseniia_Rating
-
-            FROM movies m
-
-            JOIN watch_history wh
-                ON wh.movie_id = m.id
-
-            JOIN watch_history_users whu
-                ON whu.watch_history_id = wh.id
-
-            JOIN users u
-                ON u.id = whu.user_id
-
-            LEFT JOIN ratings r
-                ON r.movie_id = m.id
-                AND r.user_id = u.id
-
-            WHERE u.username IN (
-                'Anthony',
-                'Kseniia'
-            )
-
-            GROUP BY
-                m.id,
-                m.tmdb_id,
-                m.title
-
-            HAVING COUNT(
-                DISTINCT u.username
-            ) = 2
-
-            ORDER BY m.title
-        """, conn)
-
-
-def calculate_movie_compatibility(
-    tmdb_id: int
-) -> Optional[float]:
-    """
-    Calculate compatibility using the ratings
-    of Anthony and Kseniia.
-
-    Returns a percentage.
-    """
-
-    with get_connection() as conn:
-
-        rows = conn.execute("""
-            SELECT
-                u.username,
-                r.rating
-
-            FROM ratings r
-
-            JOIN users u
-                ON u.id = r.user_id
-
-            JOIN movies m
-                ON m.id = r.movie_id
-
-            WHERE m.tmdb_id = ?
-
-            AND u.username IN (
-                'Anthony',
-                'Kseniia'
-            )
-        """, (tmdb_id,)).fetchall()
-
-        ratings = {
-            row["username"]: row["rating"]
-            for row in rows
-        }
-
-        if "Anthony" not in ratings:
-            return None
-
-        if "Kseniia" not in ratings:
-            return None
-
-        difference = abs(
-            ratings["Anthony"] -
-            ratings["Kseniia"]
-        )
-
-        # 0 difference = 100%
-        # 4.5 difference = 0%
-        compatibility = (
-            1 -
-            (difference / 4.5)
-        ) * 100
-
-        return round(
-            max(0, min(100, compatibility)),
-            1
-        )
-
-
-# ============================================================
-# RECOMMENDATION HISTORY
-# ============================================================
-
-def save_recommendation(
-    tmdb_id: int,
-    score: float,
-    reason: str,
-    user_name: Optional[str] = None
-):
-
-    movie = get_movie_by_tmdb_id(tmdb_id)
-
-    if not movie:
-        raise ValueError("Movie not found.")
-
-    user_id = None
-
-    if user_name:
-
-        user = get_user(user_name)
-
-        if user:
-            user_id = user["id"]
-
-    with get_connection() as conn:
-
-        conn.execute("""
-            INSERT INTO recommendation_history (
-                user_id,
-                movie_id,
-                recommendation_score,
-                reason
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            user_id,
-            movie["id"],
-            score,
-            reason
-        ))
-
-        conn.commit()
-
-
-# ============================================================
-# MOVIE DASHBOARD
-# ============================================================
-
-def get_movie_dashboard(
-    user_name: Optional[str] = None
-) -> pd.DataFrame:
-    """
-    Return a useful movie dashboard.
-
-    This is designed for displaying in Streamlit.
-    """
-
-    with get_connection() as conn:
-
-        query = """
-            SELECT
-
-                m.tmdb_id AS TMDB_ID,
-
-                m.title AS Title,
-
-                m.release_date AS Release_Date,
-
-                m.vote_average AS TMDB_Rating,
-
-                r.rating AS Personal_Rating,
-
-                r.is_favourite AS Favourite,
-
-                ms.status AS Status,
-
-                m.poster_path AS Poster
-
-            FROM movies m
-
-            LEFT JOIN ratings r
-                ON r.movie_id = m.id
-        """
-
-        params = []
-
-        if user_name:
-
-            query += """
-                AND r.user_id = (
-                    SELECT id
-                    FROM users
-                    WHERE username = ?
-                )
-
-                LEFT JOIN movie_status ms
-                    ON ms.movie_id = m.id
-                    AND ms.user_id = (
-                        SELECT id
-                        FROM users
-                        WHERE username = ?
-                    )
-            """
-
-            params.extend([
-                user_name,
-                user_name
-            ])
-
-        else:
-
-            query += """
-                LEFT JOIN movie_status ms
-                    ON ms.movie_id = m.id
-            """
-
-        query += """
-            ORDER BY m.title
-        """
-
-        return pd.read_sql_query(
-            query,
-            conn,
-            params=params
-        )
-
-
-# ============================================================
-# STATISTICS
-# ============================================================
-
-def get_user_statistics(
-    user_name: str
-) -> Dict[str, Any]:
-    """
-    Get basic statistics for a user.
-    """
-
-    user = get_user(user_name)
-
-    if not user:
-        raise ValueError("User not found.")
-
-    with get_connection() as conn:
-
-        watched = conn.execute("""
-            SELECT COUNT(DISTINCT wh.movie_id)
-
-            FROM watch_history wh
-
-            JOIN watch_history_users whu
-                ON whu.watch_history_id = wh.id
-
-            WHERE whu.user_id = ?
-        """, (user["id"],)).fetchone()[0]
-
-        watchlist = conn.execute("""
-            SELECT COUNT(*)
-
-            FROM watchlist
-
-            WHERE user_id = ?
-        """, (user["id"],)).fetchone()[0]
-
-        rated = conn.execute("""
-            SELECT COUNT(*)
-
-            FROM ratings
-
-            WHERE user_id = ?
-        """, (user["id"],)).fetchone()[0]
-
-        favourites = conn.execute("""
-            SELECT COUNT(*)
-
-            FROM ratings
-
-            WHERE user_id = ?
-
-            AND is_favourite = 1
-        """, (user["id"],)).fetchone()[0]
-
-        average_rating = conn.execute("""
-            SELECT AVG(rating)
-
-            FROM ratings
-
-            WHERE user_id = ?
-        """, (user["id"],)).fetchone()[0]
-
-        return {
-            "watched": watched or 0,
-            "watchlist": watchlist or 0,
-            "rated": rated or 0,
-            "favourites": favourites or 0,
-            "average_rating": (
-                round(average_rating, 2)
-                if average_rating is not None
-                else None
-            )
-        }
-
-
-# ============================================================
-# DATABASE BACKUP
-# ============================================================
-
-def backup_database(
-    backup_file: str = "movies_backup.db"
-):
-
-    with get_connection() as source:
-
-        destination = sqlite3.connect(
-            backup_file
-        )
-
-        try:
-
-            source.backup(destination)
-
-        finally:
-
-            destination.close()
-
-
-# ============================================================
-# DATABASE HEALTH CHECK
-# ============================================================
-
-def database_health_check() -> Dict[str, Any]:
-    """
-    Check that the database is working correctly.
-    """
-
-    with get_connection() as conn:
-
-        tables = conn.execute("""
-            SELECT name
-            FROM sqlite_master
-            WHERE type = 'table'
-            ORDER BY name
-        """).fetchall()
-
-        movie_count = conn.execute("""
-            SELECT COUNT(*)
-            FROM movies
-        """).fetchone()[0]
-
-        user_count = conn.execute("""
-            SELECT COUNT(*)
-            FROM users
-        """).fetchone()[0]
-
-        rating_count = conn.execute("""
-            SELECT COUNT(*)
-            FROM ratings
-        """).fetchone()[0]
-
-        watch_history_count = conn.execute("""
-            SELECT COUNT(*)
-            FROM watch_history
-        """).fetchone()[0]
-
-        return {
-            "database": DB_FILE,
-            "tables": [
-                row["name"]
-                for row in tables
-            ],
-            "users": user_count,
-            "movies": movie_count,
-            "ratings": rating_count,
-            "watch_history": watch_history_count
-        }
-
-
-# ============================================================
-# START DATABASE
-# ============================================================
-
-if __name__ == "__main__":
-
-    init_db()
-
-    print()
-    print("=" * 60)
-    print("MOVIE MANAGER DATABASE")
-    print("=" * 60)
-
-    health = database_health_check()
-
-    print(
-        f"Database: {health['database']}"
+    st.title(
+        f"❤️ {user}'s Favourite Movies"
     )
 
-    print(
-        f"Users: {health['users']}"
-    )
+    favourites = get_favourites(user)
 
-    print(
-        f"Movies: {health['movies']}"
-    )
+    if favourites.empty:
 
-    print(
-        f"Ratings: {health['ratings']}"
-    )
-
-    print(
-        f"Watch history: "
-        f"{health['watch_history']}"
-    )
-
-    print()
-    print("Users:")
-
-    users = get_all_users()
-
-    if users.empty:
-
-        print("No users found.")
+        st.info(
+            "You don't have any favourites yet."
+        )
 
     else:
 
-        for _, row in users.iterrows():
+        st.dataframe(
+            favourites,
+            use_container_width=True,
+            hide_index=True,
+        )
 
-            print(
-                f"  - {row['display_name']}"
+
+# ============================================================
+# OUR MOVIES
+# ============================================================
+
+elif page == "👥 Our Movies":
+
+    st.title("👥 Anthony & Kseniia")
+
+    st.write(
+        "Movies that both of you have watched."
+    )
+
+    shared = get_shared_watched_movies()
+
+    if shared.empty:
+
+        st.info(
+            "There aren't any shared watched movies yet."
+        )
+
+    else:
+
+        st.dataframe(
+            shared,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown("---")
+
+    st.subheader("📊 Your Statistics")
+
+    col1, col2 = st.columns(2)
+
+    anthony_stats = get_user_statistics(
+        "Anthony"
+    )
+
+    kseniia_stats = get_user_statistics(
+        "Kseniia"
+    )
+
+    with col1:
+
+        st.markdown("### 👤 Anthony")
+
+        st.metric(
+            "Watched",
+            anthony_stats["watched"],
+        )
+
+        st.metric(
+            "Watchlist",
+            anthony_stats["watchlist"],
+        )
+
+        average = anthony_stats["average_rating"]
+
+        st.metric(
+            "Average rating",
+            average if average else "—",
+        )
+
+    with col2:
+
+        st.markdown("### 👤 Kseniia")
+
+        st.metric(
+            "Watched",
+            kseniia_stats["watched"],
+        )
+
+        st.metric(
+            "Watchlist",
+            kseniia_stats["watchlist"],
+        )
+
+        average = kseniia_stats["average_rating"]
+
+        st.metric(
+            "Average rating",
+            average if average else "—",
+        )
+
+
+# ============================================================
+# PROFILE
+# ============================================================
+
+elif page == "👤 My Profile":
+
+    st.title(
+        f"👤 {user}'s Movie Profile"
+    )
+
+    profile = get_user_profile(user)
+
+    if profile:
+
+        st.success(
+            "You already have a movie profile."
+        )
+
+    else:
+
+        st.info(
+            "Let's create your movie preferences."
+        )
+
+        profile = {}
+
+
+    pacing_options = [
+        "Slow",
+        "Medium",
+        "Fast",
+        "Very Fast",
+        "No preference",
+    ]
+
+    tone_options = [
+        "Funny",
+        "Dark",
+        "Serious",
+        "Emotional",
+        "Feel-good",
+        "Suspenseful",
+        "Action-packed",
+        "Romantic",
+        "Mind-bending",
+        "Family-friendly",
+    ]
+
+    runtime_options = [
+        "Under 90 minutes",
+        "90–120 minutes",
+        "120–150 minutes",
+        "150+ minutes",
+        "No preference",
+    ]
+
+    current_pacing = (
+        profile.get("pacing")
+        if profile
+        else None
+    )
+
+    if current_pacing not in pacing_options:
+        current_pacing = "No preference"
+
+    current_tones = (
+        profile.get("tones", [])
+        if profile
+        else []
+    )
+
+    current_runtime = (
+        profile.get("runtime")
+        if profile
+        else None
+    )
+
+    if current_runtime not in runtime_options:
+        current_runtime = "No preference"
+
+
+    with st.form("profile_form"):
+
+        pacing = st.selectbox(
+            "Preferred pacing",
+            pacing_options,
+            index=pacing_options.index(
+                current_pacing
+            ),
+        )
+
+        tones = st.multiselect(
+            "Favourite movie tones",
+            tone_options,
+            default=[
+                tone
+                for tone in current_tones
+                if tone in tone_options
+            ],
+        )
+
+        runtime = st.selectbox(
+            "Preferred runtime",
+            runtime_options,
+            index=runtime_options.index(
+                current_runtime
+            ),
+        )
+
+        decades = st.multiselect(
+            "Favourite decades",
+            [
+                "1970s",
+                "1980s",
+                "1990s",
+                "2000s",
+                "2010s",
+                "2020s",
+            ],
+            default=(
+                profile.get("decades", [])
+                if profile
+                else []
+            ),
+        )
+
+        certificates = st.multiselect(
+            "Preferred certificates",
+            [
+                "U",
+                "PG",
+                "12",
+                "12A",
+                "15",
+                "18",
+            ],
+            default=(
+                profile.get(
+                    "certificates",
+                    []
+                )
+                if profile
+                else []
+            ),
+        )
+
+        favourite_actors = st.text_input(
+            "Favourite actors",
+            value=", ".join(
+                profile.get(
+                    "favourite_actors",
+                    []
+                )
+                if profile
+                else []
+            ),
+        )
+
+        favourite_directors = st.text_input(
+            "Favourite directors",
+            value=", ".join(
+                profile.get(
+                    "favourite_directors",
+                    []
+                )
+                if profile
+                else []
+            ),
+        )
+
+        disliked_actors = st.text_input(
+            "Actors you dislike",
+            value=", ".join(
+                profile.get(
+                    "disliked_actors",
+                    []
+                )
+                if profile
+                else []
+            ),
+        )
+
+        disliked_directors = st.text_input(
+            "Directors you dislike",
+            value=", ".join(
+                profile.get(
+                    "disliked_directors",
+                    []
+                )
+                if profile
+                else []
+            ),
+        )
+
+        submitted = st.form_submit_button(
+            "💾 Save Profile"
+        )
+
+        if submitted:
+
+            def split_names(value):
+                return [
+                    x.strip()
+                    for x in value.split(",")
+                    if x.strip()
+                ]
+
+            save_user_profile(
+                user_name=user,
+                pacing=pacing,
+                tones=tones,
+                decades=decades,
+                certificates=certificates,
+                runtime=runtime,
+                favourite_actors=
+                    split_names(
+                        favourite_actors
+                    ),
+                favourite_directors=
+                    split_names(
+                        favourite_directors
+                    ),
+                disliked_actors=
+                    split_names(
+                        disliked_actors
+                    ),
+                disliked_directors=
+                    split_names(
+                        disliked_directors
+                    ),
             )
 
-    print()
-    print("Database initialised successfully.")
-    print("=" * 60)
+            st.success(
+                f"{user}'s profile saved."
+            )
+
+            st.rerun()
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.sidebar.markdown("---")
+
+st.sidebar.caption(
+    "🎬 Movie Manager"
+)
+
+st.sidebar.caption(
+    "Database foundation v2.0"
+)
