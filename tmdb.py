@@ -5,24 +5,28 @@ BASE_URL = "https://api.themoviedb.org/3"
 
 
 def get_token():
-    """
-    Get the TMDB API token from Streamlit secrets.
-    """
 
     try:
-        return st.secrets["TMDB_API_TOKEN"]
+        token = st.secrets["TMDB_API_TOKEN"]
+
+        if not token:
+            return None
+
+        return str(token).strip()
+
     except Exception:
         return None
 
 
 def tmdb_request(endpoint, params=None):
-    """
-    Make a request to TMDB.
-    """
 
     token = get_token()
 
     if not token:
+        st.error(
+            "TMDB API token is missing. "
+            "Check Streamlit Secrets."
+        )
         return None
 
     headers = {
@@ -31,6 +35,7 @@ def tmdb_request(endpoint, params=None):
     }
 
     try:
+
         response = requests.get(
             f"{BASE_URL}{endpoint}",
             headers=headers,
@@ -38,18 +43,28 @@ def tmdb_request(endpoint, params=None):
             timeout=15,
         )
 
-        response.raise_for_status()
+        if response.status_code != 200:
+
+            st.error(
+                f"TMDB API error "
+                f"{response.status_code}: "
+                f"{response.text[:500]}"
+            )
+
+            return None
 
         return response.json()
 
-    except requests.RequestException:
+    except requests.RequestException as e:
+
+        st.error(
+            f"Could not connect to TMDB: {e}"
+        )
+
         return None
 
 
 def search_movies(query, page=1):
-    """
-    Search TMDB for movies.
-    """
 
     if not query.strip():
         return []
@@ -66,13 +81,13 @@ def search_movies(query, page=1):
     if not data:
         return []
 
-    return data.get("results", [])
+    return data.get(
+        "results",
+        []
+    )
 
 
 def get_movie_details(tmdb_id):
-    """
-    Get detailed information about a movie.
-    """
 
     return tmdb_request(
         f"/movie/{tmdb_id}",
@@ -83,10 +98,10 @@ def get_movie_details(tmdb_id):
     )
 
 
-def get_movie_recommendations(tmdb_id, page=1):
-    """
-    Get movies TMDB recommends based on another movie.
-    """
+def get_movie_recommendations(
+    tmdb_id,
+    page=1,
+):
 
     data = tmdb_request(
         f"/movie/{tmdb_id}/recommendations",
@@ -98,13 +113,16 @@ def get_movie_recommendations(tmdb_id, page=1):
     if not data:
         return []
 
-    return data.get("results", [])
+    return data.get(
+        "results",
+        []
+    )
 
 
-def get_similar_movies(tmdb_id, page=1):
-    """
-    Get movies similar to another movie.
-    """
+def get_similar_movies(
+    tmdb_id,
+    page=1,
+):
 
     data = tmdb_request(
         f"/movie/{tmdb_id}/similar",
@@ -116,7 +134,10 @@ def get_similar_movies(tmdb_id, page=1):
     if not data:
         return []
 
-    return data.get("results", [])
+    return data.get(
+        "results",
+        []
+    )
 
 
 def get_discover_movies(
@@ -126,9 +147,6 @@ def get_discover_movies(
     min_rating=0,
     page=1,
 ):
-    """
-    Discover movies using TMDB filters.
-    """
 
     params = {
         "sort_by": "popularity.desc",
@@ -140,19 +158,23 @@ def get_discover_movies(
     }
 
     if genres:
+
         params["with_genres"] = ",".join(
-            str(x) for x in genres
+            str(x)
+            for x in genres
         )
 
     if year_from:
-        params["primary_release_date.gte"] = (
-            f"{year_from}-01-01"
-        )
+
+        params[
+            "primary_release_date.gte"
+        ] = f"{year_from}-01-01"
 
     if year_to:
-        params["primary_release_date.lte"] = (
-            f"{year_to}-12-31"
-        )
+
+        params[
+            "primary_release_date.lte"
+        ] = f"{year_to}-12-31"
 
     data = tmdb_request(
         "/discover/movie",
@@ -162,15 +184,21 @@ def get_discover_movies(
     if not data:
         return []
 
-    return data.get("results", [])
+    return data.get(
+        "results",
+        []
+    )
 
 
-def image_url(path, size="w500"):
-    """
-    Convert a TMDB poster path into a full image URL.
-    """
+def image_url(
+    path,
+    size="w500",
+):
 
     if not path:
         return None
 
-    return f"https://image.tmdb.org/t/p/{size}{path}"
+    return (
+        f"https://image.tmdb.org/t/p/"
+        f"{size}{path}"
+    )
