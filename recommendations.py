@@ -1,88 +1,176 @@
+import json
+
 from database import (
-    get_user,
     get_ratings,
     get_watchlist,
     get_watch_history,
+    get_profile,
 )
 
 from tmdb import (
     get_movie_recommendations,
     get_similar_movies,
     get_movie_details,
+    get_discover_movies,
 )
+
+
+# ============================================================
+# STARTING TASTE PROFILES
+# ============================================================
+
+STARTING_PROFILES = {
+
+    "Anthony": {
+        "genres": [
+            28,     # Action
+            53,     # Thriller
+            80,     # Crime
+            9648,   # Mystery
+            18,     # Drama
+        ],
+
+        "keywords": [
+            "crime",
+            "true crime",
+            "investigation",
+            "murder",
+            "conspiracy",
+            "psychological",
+            "serial killer",
+            "revenge",
+            "detective",
+        ],
+    },
+
+    "Kseniia": {
+        "genres": [
+            10749,  # Romance
+            35,     # Comedy
+            18,     # Drama
+        ],
+
+        "keywords": [
+            "romance",
+            "love",
+            "relationship",
+            "beautiful",
+            "emotional",
+            "chemistry",
+            "seduction",
+            "passion",
+        ],
+    },
+}
 
 
 # ============================================================
 # HELPERS
 # ============================================================
 
-def normalise(value, minimum, maximum):
-    if value is None:
-        return 0
+def safe_json(value):
 
-    if maximum == minimum:
-        return 0
+    if not value:
+        return []
 
-    return (value - minimum) / (
-        maximum - minimum
+    if isinstance(value, list):
+        return value
+
+    try:
+        return json.loads(value)
+    except Exception:
+        return []
+
+
+def get_watched_ids(username):
+
+    history = get_watch_history(
+        username,
+        limit=5000,
     )
 
+    if history.empty:
+        return set()
 
-def movie_id_from_row(row):
-    return int(row["TMDB_ID"])
+    return {
+        int(x)
+        for x in history["TMDB_ID"].tolist()
+    }
+
+
+def get_watchlist_ids(username):
+
+    watchlist = get_watchlist(username)
+
+    if watchlist.empty:
+        return set()
+
+    return {
+        int(x)
+        for x in watchlist["TMDB_ID"].tolist()
+    }
 
 
 # ============================================================
-# USER TASTE PROFILE
+# USER PROFILE
 # ============================================================
 
-def build_taste_profile(user_name):
+def build_taste_profile(username):
 
-    ratings = get_ratings(user_name)
+    ratings = get_ratings(username)
 
     profile = {
+        "genres": {},
         "liked_movies": [],
         "disliked_movies": [],
         "average_rating": None,
+        "rating_count": 0,
     }
 
     if ratings.empty:
         return profile
 
-    average = ratings["Rating"].mean()
+    profile["rating_count"] = len(ratings)
 
     profile["average_rating"] = float(
-        average
+        ratings["Rating"].mean()
     )
 
-    liked = ratings[
-        ratings["Rating"] >= 4
-    ]
+    for _, row in ratings.iterrows():
 
-    disliked = ratings[
-        ratings["Rating"] <= 2
-    ]
+        movie_id = int(
+            row["TMDB_ID"]
+        )
 
-    profile["liked_movies"] = [
-        int(x)
-        for x in liked["TMDB_ID"].tolist()
-    ]
+        rating = float(
+            row["Rating"]
+        )
 
-    profile["disliked_movies"] = [
-        int(x)
-        for x in disliked["TMDB_ID"].tolist()
-    ]
+        if rating >= 4:
+
+            profile[
+                "liked_movies"
+            ].append(movie_id)
+
+        elif rating <= 2:
+
+            profile[
+                "disliked_movies"
+            ].append(movie_id)
 
     return profile
 
 
 # ============================================================
-# GET SEED MOVIES
+# SEED MOVIES
 # ============================================================
 
-def get_seed_movies(user_name, maximum=8):
+def get_seed_movies(
+    username,
+    maximum=10,
+):
 
-    ratings = get_ratings(user_name)
+    ratings = get_ratings(username)
 
     if ratings.empty:
         return []
@@ -96,9 +184,7 @@ def get_seed_movies(user_name, maximum=8):
 
     for _, row in ratings.iterrows():
 
-        rating = float(row["Rating"])
-
-        if rating >= 4:
+        if float(row["Rating"]) >= 4:
 
             seeds.append(
                 int(row["TMDB_ID"])
@@ -111,59 +197,49 @@ def get_seed_movies(user_name, maximum=8):
 
 
 # ============================================================
-# GET WATCHED IDS
+# STARTING PROFILE DISCOVERY
 # ============================================================
 
-def get_watched_ids(user_name):
+def get_starting_genres(username):
 
-    history = get_watch_history(
-        user_name,
-        limit=1000,
+    data = STARTING_PROFILES.get(
+        username,
+        {}
     )
 
-    if history.empty:
-        return set()
-
-    return {
-        int(x)
-        for x in history["TMDB_ID"].tolist()
-    }
-
-
-# ============================================================
-# GET WATCHLIST IDS
-# ============================================================
-
-def get_watchlist_ids(user_name):
-
-    watchlist = get_watchlist(
-        user_name
+    return data.get(
+        "genres",
+        []
     )
 
-    if watchlist.empty:
-        return set()
-
-    return {
-        int(x)
-        for x in watchlist["TMDB_ID"].tolist()
-    }
-
 
 # ============================================================
-# BUILD CANDIDATES
+# CANDIDATES
 # ============================================================
 
 def build_candidates(
-    user_name,
+    username,
     maximum_seeds=8,
 ):
 
-    seeds = get_seed_movies(
-        user_name,
-        maximum_seeds,
+    watched = get_watched_ids(
+        username
+    )
+
+    watchlist = get_watchlist_ids(
+        username
     )
 
     candidates = {}
+
+    # --------------------------------------------------------
+    # FROM RATINGS
+    # --------------------------------------------------------
+
+    seeds = get_seed_movies(
+        username,
+        maximum_seeds,
+    )
 
     for seed in seeds:
 
@@ -178,32 +254,57 @@ def build_candidates(
         )
 
         for movie in recommendations:
-            candidates[
-                movie["id"]
-            ] = movie
+
+            if movie.get("id"):
+                candidates[
+                    movie["id"]
+                ] = movie
 
         for movie in similar:
-            candidates[
-                movie["id"]
-            ] = movie
 
-    watched = get_watched_ids(
-        user_name
-    )
+            if movie.get("id"):
+                candidates[
+                    movie["id"]
+                ] = movie
 
-    watchlist = get_watchlist_ids(
-        user_name
-    )
+    # --------------------------------------------------------
+    # FROM STARTING PROFILE
+    # --------------------------------------------------------
 
-    # Don't recommend something
-    # they've already watched.
-    # Don't duplicate their watchlist.
+    if not candidates:
 
-    filtered = []
+        genres = get_starting_genres(
+            username
+        )
+
+        for genre in genres:
+
+            movies = get_discover_movies(
+                genres=[genre],
+                min_rating=6.5,
+                min_vote_count=250,
+                sort_by="popularity.desc",
+            )
+
+            for movie in movies:
+
+                if movie.get("id"):
+                    candidates[
+                        movie["id"]
+                    ] = movie
+
+    # --------------------------------------------------------
+    # FILTER
+    # --------------------------------------------------------
+
+    results = []
 
     for movie in candidates.values():
 
         movie_id = movie.get("id")
+
+        if not movie_id:
+            continue
 
         if movie_id in watched:
             continue
@@ -211,134 +312,194 @@ def build_candidates(
         if movie_id in watchlist:
             continue
 
-        filtered.append(movie)
+        results.append(movie)
 
-    return filtered
+    return results
 
 
 # ============================================================
-# MOVIE SCORE
+# SCORE
 # ============================================================
 
 def score_movie(
     movie,
-    liked_genres=None,
-    disliked_genres=None,
-    favourite_actors=None,
-    favourite_directors=None,
+    username=None,
 ):
-
-    liked_genres = liked_genres or []
-    disliked_genres = disliked_genres or []
-
-    favourite_actors = favourite_actors or []
-    favourite_directors = favourite_directors or []
 
     score = 50.0
 
-    tmdb_rating = movie.get(
-        "vote_average",
-        0,
+    profile = STARTING_PROFILES.get(
+        username,
+        {}
     )
 
-    popularity = movie.get(
-        "popularity",
-        0,
+    preferred_genres = set(
+        profile.get(
+            "genres",
+            []
+        )
+    )
+
+    movie_genres = set(
+        movie.get(
+            "genre_ids",
+            []
+        )
     )
 
     # --------------------------------------------------------
-    # TMDB quality
+    # STARTING PROFILE GENRES
     # --------------------------------------------------------
 
-    if tmdb_rating >= 8:
+    matching_genres = (
+        preferred_genres
+        & movie_genres
+    )
+
+    score += len(
+        matching_genres
+    ) * 8
+
+    # --------------------------------------------------------
+    # TMDB QUALITY
+    # --------------------------------------------------------
+
+    tmdb_rating = float(
+        movie.get(
+            "vote_average",
+            0
+        ) or 0
+    )
+
+    if tmdb_rating >= 8.5:
         score += 15
 
+    elif tmdb_rating >= 8:
+        score += 12
+
     elif tmdb_rating >= 7:
-        score += 10
+        score += 8
 
     elif tmdb_rating >= 6:
-        score += 5
-
-    # --------------------------------------------------------
-    # Popularity
-    # --------------------------------------------------------
-
-    if popularity >= 100:
-        score += 5
-
-    elif popularity >= 50:
         score += 3
 
     # --------------------------------------------------------
-    # Genres
+    # POPULARITY
     # --------------------------------------------------------
 
-    movie_genres = set(
-        movie.get("genre_ids", [])
+    popularity = float(
+        movie.get(
+            "popularity",
+            0
+        ) or 0
     )
 
-    for genre in liked_genres:
+    if popularity >= 200:
+        score += 6
 
-        if genre in movie_genres:
-            score += 8
+    elif popularity >= 100:
+        score += 4
 
-    for genre in disliked_genres:
-
-        if genre in movie_genres:
-            score -= 15
+    elif popularity >= 50:
+        score += 2
 
     # --------------------------------------------------------
-    # Keep score sensible
+    # PROFILE RATINGS
     # --------------------------------------------------------
+
+    if username:
+
+        ratings = get_ratings(
+            username
+        )
+
+        if not ratings.empty:
+
+            liked_genres = set()
+            disliked_genres = set()
+
+            for _, row in ratings.iterrows():
+
+                rating = float(
+                    row["Rating"]
+                )
+
+                genres = safe_json(
+                    row.get("Genres")
+                )
+
+                if rating >= 4:
+
+                    liked_genres.update(
+                        genres
+                    )
+
+                elif rating <= 2:
+
+                    disliked_genres.update(
+                        genres
+                    )
+
+            for genre in movie_genres:
+
+                if genre in liked_genres:
+                    score += 6
+
+                if genre in disliked_genres:
+                    score -= 8
 
     return round(
         max(
             0,
             min(
                 100,
-                score,
-            ),
+                score
+            )
         ),
         1,
     )
 
 
 # ============================================================
-# PERSONAL RECOMMENDATIONS
+# PERSONAL
 # ============================================================
 
 def get_personal_recommendations(
-    user_name,
+    username,
     limit=12,
 ):
 
     candidates = build_candidates(
-        user_name
+        username
     )
 
     results = []
 
     for movie in candidates:
 
-        score = score_movie(
-            movie
-        )
-
         movie = dict(movie)
 
         movie[
             "match_score"
-        ] = score
+        ] = score_movie(
+            movie,
+            username,
+        )
 
         movie[
             "match_for"
-        ] = user_name
+        ] = username
 
-        results.append(movie)
+        results.append(
+            movie
+        )
 
     results.sort(
         key=lambda x: (
-            x["match_score"],
+            x.get(
+                "match_score",
+                0
+            ),
             x.get(
                 "vote_average",
                 0
@@ -351,7 +512,7 @@ def get_personal_recommendations(
 
 
 # ============================================================
-# SHARED RECOMMENDATIONS
+# SHARED
 # ============================================================
 
 def get_shared_recommendations(
@@ -371,14 +532,26 @@ def get_shared_recommendations(
     combined = {}
 
     for movie in candidates_one:
+
         combined[
             movie["id"]
         ] = movie
 
     for movie in candidates_two:
+
         combined[
             movie["id"]
         ] = movie
+
+    ids_one = {
+        x["id"]
+        for x in candidates_one
+    }
+
+    ids_two = {
+        x["id"]
+        for x in candidates_two
+    }
 
     watched_one = get_watched_ids(
         user_one
@@ -400,27 +573,35 @@ def get_shared_recommendations(
         if movie_id in watched_two:
             continue
 
-        base_score = score_movie(
-            movie
+        score_one = score_movie(
+            movie,
+            user_one,
         )
 
-        # Shared recommendation gets
-        # a small boost because it came
-        # from the tastes of both users.
+        score_two = score_movie(
+            movie,
+            user_two,
+        )
+
+        # Both people's predicted
+        # enjoyment matters.
+
+        shared_score = (
+            score_one * 0.5
+            +
+            score_two * 0.5
+        )
+
+        # Extra reward when both
+        # recommendation engines
+        # independently found it.
 
         if (
-            movie_id in {
-                x["id"]
-                for x in candidates_one
-            }
-            and
-            movie_id in {
-                x["id"]
-                for x in candidates_two
-            }
+            movie_id in ids_one
+            and movie_id in ids_two
         ):
 
-            base_score += 12
+            shared_score += 10
 
         movie = dict(movie)
 
@@ -429,23 +610,32 @@ def get_shared_recommendations(
         ] = round(
             min(
                 100,
-                base_score,
+                shared_score
             ),
             1,
         )
 
         movie[
-            "match_for"
-        ] = (
-            f"{user_one} + "
-            f"{user_two}"
-        )
+            "anthony_score"
+        ] = score_one
 
-        results.append(movie)
+        movie[
+            "kseniia_score"
+        ] = score_two
+
+        movie[
+            "match_for"
+        ] = "Anthony + Kseniia"
+
+        results.append(
+            movie
+        )
 
     results.sort(
         key=lambda x: (
-            x["match_score"],
+            x[
+                "match_score"
+            ],
             x.get(
                 "vote_average",
                 0
@@ -458,7 +648,7 @@ def get_shared_recommendations(
 
 
 # ============================================================
-# RECOMMENDATION REASON
+# REASON
 # ============================================================
 
 def recommendation_reason(movie):
@@ -469,31 +659,54 @@ def recommendation_reason(movie):
         "vote_average"
     )
 
-    if rating and rating >= 8:
+    if rating:
+
+        if rating >= 8:
+            reasons.append(
+                "Highly rated"
+            )
+
+        elif rating >= 7:
+            reasons.append(
+                "Strong reviews"
+            )
+
+    genres = movie.get(
+        "genre_ids",
+        []
+    )
+
+    if 28 in genres:
         reasons.append(
-            "Highly rated on TMDB"
+            "Action"
         )
 
-    elif rating and rating >= 7:
+    if 53 in genres:
         reasons.append(
-            "Strong TMDB rating"
+            "Thriller"
         )
 
-    if movie.get(
-        "popularity",
-        0
-    ) >= 100:
-
+    if 80 in genres:
         reasons.append(
-            "Popular with viewers"
+            "Crime"
+        )
+
+    if 10749 in genres:
+        reasons.append(
+            "Romance"
+        )
+
+    if 18 in genres:
+        reasons.append(
+            "Emotional drama"
         )
 
     if not reasons:
 
         reasons.append(
-            "Similar to films you've enjoyed"
+            "Matches your taste profile"
         )
 
     return " • ".join(
-        reasons[:3]
+        reasons[:4]
     )
